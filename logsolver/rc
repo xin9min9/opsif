@@ -1,0 +1,126 @@
+#!/bin/ksh
+# IBM_PROLOG_BEGIN_TAG 
+# This is an automatically generated prolog. 
+#  
+# bos61J src/bos/etc/rc/rc.sh 1.20.1.11 
+#  
+# Licensed Materials - Property of IBM 
+#  
+# COPYRIGHT International Business Machines Corp. 1989,1995 
+# All Rights Reserved 
+#  
+# US Government Users Restricted Rights - Use, duplication or 
+# disclosure restricted by GSA ADP Schedule Contract with IBM Corp. 
+#  
+# @(#)06      1.20.1.11  src/bos/etc/rc/rc.sh, cfgetc, bos61J, 0928A_61J 6/2/09 13:15:35
+# IBM_PROLOG_END_TAG 
+#
+# COMPONENT_NAME: (CFGETC) Multi-user mode system setup
+#
+# FUNCTIONS: rc
+#
+# ORIGINS: 27
+#
+# (C) COPYRIGHT International Business Machines Corp. 1989, 1998
+# All Rights Reserved
+# Licensed Materials - Property of IBM
+#
+# US Government Users Restricted Rights - Use, duplication or
+# disclosure restricted by GSA ADP Schedule Contract with IBM Corp.
+#
+################################################################
+
+/usr/bin/dspmsg rc.cat 1 'Starting Multi-user Initialization\n'
+PATH=/usr/sbin:/usr/bin:/usr/ucb:/etc
+ODMDIR=/etc/objrepos
+export PATH ODMDIR
+
+# We may need to configure live dump again if the directory doesn't exist now.
+# This will be the case if it resides outside rootvg, since cfglivedump
+# will have created it otherwise.
+# Get odm entry for the repository.
+unset lddir
+lddir=`odmget -q "attribute = 'livedump_dir'" SWservAt |\
+awk '
+  $1 == "value" {
+	gsub("\"","",$3)
+	print $3}'`
+# If directory exists, we're ok and don't need to reconfigure live dump.
+# Note that we consider it to exist even if not a directory.
+[[ -e "$lddir" ]] && unset lddir
+
+# Varyon all Volume Groups marked as auto-varyon.
+# ( rootvg already varied on)
+dspmsg rc.cat 2 ' Performing auto-varyon of Volume Groups \n'
+cfgvg
+
+# reconfigure live dump if we should now have a directory.
+if [[ -n "$lddir" ]]
+then	# Directory not created earlier.
+	dspmsg rc.cat 9 ' Performing subsequent live dump configuration \n'
+	/usr/lib/methods/cfglivedump -c
+fi
+
+# Activate all paging spaces in automatic list
+# (those listed in /etc/swapspaces)
+dspmsg rc.cat 3 ' Activating all paging spaces \n'
+swapon -a
+
+# Configure all dump devices
+sysdumpdev -q
+
+# Perform file system checks
+# The -f flag skips the check if the log has been replayed successfully
+fsck -fp
+
+# Perform all auto mounts
+dspmsg rc.cat 4 ' Performing all automatic mounts \n'
+
+# Remove the file 'fs1.$$' if it already exists
+rm -f /tmp/fs1.$$
+
+# handle the egrep line carefully: between each pair of brackets is a tab
+# followed by a space, and the tab may get lost if you copy and paste the line
+egrep -vp "^[	 ]*vfs[	 ]*=[	 ]*(cachefs|nfs|cifs)[	 ]*$" \
+			/etc/filesystems > /tmp/fs1.$$
+
+mount /tmp/fs1.$$ /etc/filesystems
+mount all
+umount /etc/filesystems
+rm -f /tmp/fs1.$$
+
+if [ -x /etc/rc.nfs4ss ]
+then
+	/etc/rc.nfs4ss
+fi
+
+# Remove /etc/nologin if left behind by shutdown
+rm -f /etc/nologin
+
+# Running expreserve to recover vi editor sessions
+/usr/lib/expreserve - 2>/dev/null
+
+# Write a dummy record to file /usr/adm/sa/sa<date> to specify
+# that system start up has occurred.
+#MSG=`dspmsg rc.cat 7 'Write system start up record to /usr/adm/sa/sa'``date +%d`
+#echo $MSG
+#/usr/bin/su - adm -c /usr/lib/sa/sadc /usr/adm/sa/sa`date +%d`
+
+# Load random number generator
+/usr/sbin/randomctl -l
+
+# If a seed was saved, feed to to /dev/random
+if [ -f /etc/security/random-seed ]; then
+	dd if=/etc/security/random-seed of=/dev/random > /dev/null 2>&1
+	rm -f /etc/security/random-seed
+fi
+
+# Manufacturing post install process.
+# This must be at the end of this file, /etc/rc.
+if [ -x /etc/mfg/rc.preload ]
+then
+	/etc/mfg/rc.preload
+fi
+
+dspmsg rc.cat 5 'Multi-user initialization completed\n'
+exit 0

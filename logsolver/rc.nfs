@@ -1,0 +1,359 @@
+#!/bin/ksh
+# IBM_PROLOG_BEGIN_TAG 
+# This is an automatically generated prolog. 
+#  
+# onc610 src/oncplus/etc/rc.nfs.sh 1.25 
+#  
+# Licensed Materials - Property of IBM 
+#  
+# COPYRIGHT International Business Machines Corp. 1996,2007 
+# All Rights Reserved 
+#  
+# US Government Users Restricted Rights - Use, duplication or 
+# disclosure restricted by GSA ADP Schedule Contract with IBM Corp. 
+#  
+# IBM_PROLOG_END_TAG 
+
+umask 002
+
+DSPMSG=/usr/bin/dspmsg
+MSGCAT=tuno.cat
+MSGSET=2
+LOGFILE=/etc/tunables/lastboot.log
+TUNCHANGE=/usr/sbin/tunchange
+
+#
+# start() has the following logic
+# 1) if srcmstr is running, use it to start the daemon
+# 2) if srcmstr is NOT running, lookup the daemon path and arguments from
+# srcmstr's config database in odm (SRCsubsys).
+# 3) if the config info can not be found, attempt to start the daemon
+# from the default parameters passed into start().
+#
+start()
+{
+
+daemon=$1 					    # Subsystem name
+default_path=$2					    # full path w/ cmdname
+shift;shift
+default_arg=$*					    # default arguments
+
+#
+# get the path to the daemon from the SRC ODM config info
+#
+daemon_path=`odmget -q subsysname=$daemon SRCsubsys 2>/dev/null | \
+      awk ' $1 == "path" { print $NF }' 2>/dev/null | sed 's/"//g' `
+
+#
+# if daemon_path not set (length zero) then try synonymname
+#
+if [ -z "$daemon_path" ] ; then 	
+	daemon_path=`odmget -q synonym=$daemon SRCsubsys 2>/dev/null | \
+      		awk ' $1 == "path" { print $NF }' 2>/dev/null | sed 's/"//g' `
+fi
+
+#
+# get the arguments to the daemon from the SRC ODM config info
+#
+cmdargs=`odmget -q subsysname=$daemon SRCsubsys 2>/dev/null | grep cmdargs | sed 's/[[:space:]]*cmdargs[[:space:]]*=[[:space:]]*//' | sed 's/"\(.*\)"/\1/'`
+
+if [ -n "$src_running" -a -n "$daemon_path" ] ; then 	
+	#
+	#if srcmstr is running and there is an entry in SRCsubsys - use src
+	#
+	if [ -n "$src_dynamic" -a "$daemon" != "ypbind" ] ; then
+		startsrc -s $daemon &
+	else
+		startsrc -s $daemon 
+	fi
+else					#if srcmstr not running, start manually
+	if [ -n "$src_dynamic" ] ; then
+		wait
+		src_dynamic=""
+	fi
+	if [ -n "$daemon_path" ] ; then
+		if [ -n "$cmdargs" ] ; then
+			$daemon_path $cmdargs  &		# issue cmd
+		else
+			$daemon_path $default_arg  & 	# issue cmd
+		fi
+	else
+		$default_path $default_arg &  		#issue cmd
+	fi
+	
+fi
+
+} 	# end start()
+
+# By default, start() will start NFS deamons in background.
+src_dynamic=1
+
+#
+# determine of srcmstr is running 
+#
+if [ -n "`ps -e | awk '$NF == "srcmstr" {print $1} '`" ] ; then
+       src_running=1
+else 
+       src_running=""
+fi
+
+
+
+# Uncomment the following lines  and change the domain
+# name to define your domain (domain must be defined
+# before starting NIS).
+#if [ -x /usr/bin/domainname ]; then
+#	/usr/bin/domainname ibm
+#fi
+
+#
+# Clear all servers' rmtab files in case we went down abnormally.
+#
+if [ -s /sbin/helpers/nfsmnthelp ]; then
+	/sbin/helpers/nfsmnthelp B 0
+fi
+
+#dspmsg cmdnfs.cat -s 8 2 "starting NIS services:\n"
+#trap 'dspmsg cmdnfs.cat -s 8 4 "Completed NIS services.\n"' 0
+#if [ -x /usr/lib/netsvc/yp/ypserv -a -d /var/yp/`domainname` ]; then
+#	start ypserv /usr/lib/netsvc/yp/ypserv
+#fi
+
+#if [ -x /usr/lib/netsvc/yp/ypbind ]; then
+#	start ypbind /usr/lib/netsvc/yp/ypbind
+#fi
+
+#if [ -x /usr/sbin/keyserv ]; then
+#	start keyserv /usr/sbin/keyserv
+#fi
+
+#if [ -x /usr/lib/netsvc/yp/rpc.ypupdated -a -d /var/yp/`domainname` ]; then
+#	start ypupdated /usr/lib/netsvc/yp/rpc.ypupdated
+#fi
+
+dspmsg cmdnfs.cat -s 8 1 "Starting NFS services:\n"
+trap 'dspmsg cmdnfs.cat -s 8 3 "Completed NFS services.\n"' 0
+if [ -x /usr/sbin/biod ]; then
+	start biod /usr/sbin/biod
+fi
+
+#
+
+#
+# mount the proxy mount here because this could be a proxy server
+nfs_mount=`grep -p "=[[:blank:]]*proxyfs" /etc/filesystems | grep -p nodename | grep mount | grep -c true`
+if [ "$nfs_mount" -ne "0" ]; then
+	sleep 5
+	/usr/sbin/mount -t proxyfs
+fi
+# End proxy startup
+
+#
+# If we are a Thin Server with NFSv4 filesystems, nfsrgyd has been
+# started at the very beginning of phase 3 in rc.boot.
+# In this case, no need to restart it.
+# Begin nfsrgyd startup
+if [ -s /usr/sbin/nfsrgyd -a -f /etc/nfs/local_domain ]; then
+	nfsrgyd_pid=`ps -e | awk '$NF == "nfsrgyd" {print $1}'`
+
+# if [ -x /usr/sbin/gssd ] ; then
+#     start gssd /usr/sbin/gssd
+# fi
+
+	[ -z "$nfsrgyd_pid" ] && start nfsrgyd /usr/sbin/nfsrgyd
+fi
+# End nfsrgyd startup
+
+# If nfs daemon is executable and /etc/exports, become nfs server.
+#
+nfsd_running=0
+if /usr/bin/ps -eo comm | /usr/bin/grep -w nfsd > /dev/null ; then
+    nfsd_running=1
+fi
+
+mountd_running=0
+if /usr/bin/ps -eo comm | /usr/bin/grep -w rpc.mountd > /dev/null ; then
+    mountd_running=1
+fi
+
+# Unexport only if the nfsd and mountd daemons are not active
+if [ $nfsd_running -eq 0 ] && [ $mountd_running -eq 0 ] ; then
+    /usr/sbin/exportfs -ua
+fi
+
+if [ -x /usr/sbin/nfsd -a -f /etc/exports ]; then
+	/usr/sbin/exportfs -a
+	start nfsd /usr/sbin/nfsd
+	start rpc.mountd /usr/sbin/rpc.mountd
+fi
+
+#
+# Get boot tunable values for lockd and statd
+#
+
+LOCKD_DEBUG_LEVEL=`nfso -x lockd_debug_level 2>/dev/null | awk '{FS=",";print $4}'`
+STATD_DEBUG_LEVEL=`nfso -x statd_debug_level 2>/dev/null | awk '{FS=",";print $4}'`
+STATD_MAX_THREADS=`nfso -x statd_max_threads 2>/dev/null | awk '{FS=",";print $4}'`
+LOCKD_DEBUG_LEVEL_D=`nfso -x lockd_debug_level 2>/dev/null | awk '{FS=",";print $3}'`
+STATD_DEBUG_LEVEL_D=`nfso -x statd_debug_level 2>/dev/null | awk '{FS=",";print $3}'`
+STATD_MAX_THREADS_D=`nfso -x statd_max_threads 2>/dev/null | awk '{FS=",";print $3}'`
+
+if [ $LOCKD_DEBUG_LEVEL ]; then
+    /usr/sbin/nfso -C -r -o lockd_debug_level=$LOCKD_DEBUG_LEVEL > /dev/null 2>>$LOGFILE
+    if [ $? -eq 0 ]; then
+      if [ $PPID -eq 1 ]; then
+        if [ $LOCKD_DEBUG_LEVEL -ne $LOCKD_DEBUG_LEVEL_D ]; then
+	    $DSPMSG -s $MSGSET $MSGCAT \
+		22 'Setting %1$s to %2$s\n' \
+		lockd_debug_level $LOCKD_DEBUG_LEVEL \
+		>> $LOGFILE
+
+	fi
+	$TUNCHANGE -f lastboot -t nfso -o lockd_debug_level=$LOCKD_DEBUG_LEVEL
+	NEWARGS=`odmget -q subsysname=rpc.lockd SRCsubsys 2>/dev/null | grep cmdargs | sed 's/[[:space:]]*cmdargs[[:space:]]*=[[:space:]]*//' | sed "s/-d[[:space:]]*[[:digit:]]*/-d $LOCKD_DEBUG_LEVEL/g" |  sed 's/"\(.*\)"/\1/'`
+	echo $NEWARGS | grep -q -- -d > /dev/null
+	if [ $? -eq 0 ]; then
+	    FIXARGS=`echo $NEWARGS`
+	else
+	    FIXARGS=`echo -d $LOCKD_DEBUG_LEVEL $NEWARGS`
+	fi
+	chssys -s rpc.lockd -a "$FIXARGS" > /dev/null 2>&1
+      fi
+    else
+	LOCKD_DEBUG_LEVEL="NONE"
+    fi
+else
+    LOCKD_DEBUG_LEVEL="NONE"
+fi
+
+if [ $STATD_DEBUG_LEVEL ]; then
+    /usr/sbin/nfso -C -r -o statd_debug_level=$STATD_DEBUG_LEVEL > /dev/null 2>>$LOGFILE
+    if [ $? -eq 0 ]; then
+      if [ $PPID -eq 1 ]; then
+        if [ $STATD_DEBUG_LEVEL -ne $STATD_DEBUG_LEVEL_D ]; then
+	    $DSPMSG -s $MSGSET $MSGCAT \
+		22 'Setting %1$s to %2$s\n' \
+		statd_debug_level $STATD_DEBUG_LEVEL \
+		>> $LOGFILE
+
+	fi
+	$TUNCHANGE -f lastboot -t nfso -o statd_debug_level=$STATD_DEBUG_LEVEL
+	NEWARGS=`odmget -q subsysname=rpc.statd SRCsubsys 2>/dev/null | grep cmdargs | sed 's/[[:space:]]*cmdargs[[:space:]]*=[[:space:]]*//' | sed "s/-d[[:space:]]*[[:digit:]]*/-d $STATD_DEBUG_LEVEL/g" | sed 's/"\(.*\)"/\1/'`
+	echo $NEWARGS | grep -q -- -d > /dev/null
+	if [ $? -eq 0 ]; then
+	    FIXARGS=`echo $NEWARGS`
+	else
+	    FIXARGS=`echo $NEWARGS -d $STATD_DEBUG_LEVEL`
+	fi
+	chssys -s rpc.statd -a "$FIXARGS" > /dev/null 2>&1
+      fi
+    else
+	STATD_DEBUG_LEVEL="NONE"
+    fi
+else
+    STATD_DEBUG_LEVEL="NONE"
+fi
+
+if [ $STATD_MAX_THREADS ]; then
+    /usr/sbin/nfso -C -r -o statd_max_threads=$STATD_MAX_THREADS > /dev/null 2>>$LOGFILE
+    if [ $? -eq 0 ]; then
+      if [ $PPID -eq 1 ]; then
+        if [ $STATD_MAX_THREADS -ne $STATD_MAX_THREADS_D ]; then
+	    $DSPMSG -s $MSGSET $MSGCAT \
+		22 'Setting %1$s to %2$s\n' \
+		statd_max_threads $STATD_MAX_THREADS \
+		>> $LOGFILE
+
+	fi
+	$TUNCHANGE -f lastboot -t nfso -o statd_max_threads=$STATD_MAX_THREADS
+	NEWARGS=`odmget -q subsysname=rpc.statd SRCsubsys 2>/dev/null | grep cmdargs | sed 's/[[:space:]]*cmdargs[[:space:]]*=[[:space:]]*//' | sed "s/-t[[:space:]]*[[:digit:]]*/-t $STATD_MAX_THREADS/g" | sed 's/"\(.*\)"/\1/'`
+	echo $NEWARGS | grep -q -- -t > /dev/null
+	if [ $? -eq 0 ]; then
+	    FIXARGS=`echo $NEWARGS`
+	else
+	    FIXARGS=`echo $NEWARGS -t $STATD_MAX_THREADS`
+	fi
+	chssys -s rpc.statd -a "$FIXARGS" > /dev/null 2>&1
+      fi
+    else
+	STATD_MAX_THREADS="NONE"
+    fi
+else
+    STATD_MAX_THREADS="NONE"
+fi
+
+#
+# start up status monitor and locking daemon if present
+#
+if [ -x /usr/sbin/rpc.statd ]; then
+	# Do not start rpc.statd if TCP/IP is not configured
+	if [ "`/usr/sbin/ifconfig -l`" != "lo0" ]; then
+	    if [ $STATD_DEBUG_LEVEL != "NONE" ]; then
+	        if [ $STATD_MAX_THREADS != "NONE" ]; then
+		    start rpc.statd /usr/sbin/rpc.statd -d $STATD_DEBUG_LEVEL -t $STATD_MAX_THREADS
+		else
+		    start rpc.statd /usr/sbin/rpc.statd -d $STATD_DEBUG_LEVEL
+		fi
+	    else
+	        if [ $STATD_MAX_THREADS != "NONE" ]; then
+		    start rpc.statd /usr/sbin/rpc.statd -t $STATD_MAX_THREADS
+		else
+		    start rpc.statd /usr/sbin/rpc.statd
+		fi
+	    fi
+	fi
+fi
+
+if [ -x /usr/sbin/rpc.lockd ]; then
+	if [ $LOCKD_DEBUG_LEVEL != "NONE" ]; then
+	    start rpc.lockd /usr/sbin/rpc.lockd -d $LOCKD_DEBUG_LEVEL
+        else
+		start rpc.lockd /usr/sbin/rpc.lockd
+        fi
+fi
+
+#
+#Uncomment the following lines to start up the NIS 
+#yppasswd daemon.
+#DIR=/etc
+#if [ -x /usr/lib/netsvc/yp/rpc.yppasswdd -a -f $DIR/passwd ]; then
+#	start rpc.yppasswdd /usr/lib/netsvc/yp/rpc.yppasswdd /etc/passwd -m
+#fi
+
+#if [ -x /usr/sbin/nis_cachemgr ]; then
+#	start nis_cachemgr /usr/sbin/nis_cachemgr
+#fi
+
+#if [ -x /usr/sbin/rpc.nisd ]; then
+#	start rpc.nisd /usr/sbin/rpc.nisd
+#fi
+
+#if [ -x /usr/sbin/rpc.nispasswdd ]; then
+#	start rpc.nispasswdd /usr/sbin/rpc.nispasswdd
+#fi
+
+# Wait until all child processes started successfully if NFS deamons
+# were started in background.
+if [ -n "$src_dynamic" ] ; then
+        wait
+fi
+
+nfs_mount=`grep -p "=[[:blank:]]*nfs" /etc/filesystems | grep -p nodename | grep mount | grep -c true`
+if [ "$nfs_mount" -ne "0" ]
+then
+	/usr/sbin/mount -v nfs all
+fi
+
+# make sure to mount the cachefs filesystem only. not proxyfs
+nfs_mount=`grep -p "=[[:blank:]]*cachefs" /etc/filesystems | grep -v -p proxyfs | grep -p nodename | grep mount | grep -c true`
+if [ "$nfs_mount" -ne "0" ]
+then
+	/usr/sbin/mount -v cachefs all
+fi
+## Begin AutoFS startup   ## Do NOT remove
+##
+if [ -s /etc/auto_master ]; then 
+	/usr/sbin/automount
+fi
+##
+## End AutoFS startup   ## Do NOT remove

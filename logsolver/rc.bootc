@@ -1,0 +1,249 @@
+#!/usr/bin/ksh
+# IBM_PROLOG_BEGIN_TAG 
+# This is an automatically generated prolog. 
+#  
+# bos71F src/bos/etc/rc.bootc/rc.bootc.sh 1.15.1.3 
+#  
+# Licensed Materials - Property of IBM 
+#  
+# COPYRIGHT International Business Machines Corp. 2005,2011 
+# All Rights Reserved 
+#  
+# US Government Users Restricted Rights - Use, duplication or 
+# disclosure restricted by GSA ADP Schedule Contract with IBM Corp. 
+#  
+# IBM_PROLOG_END_TAG 
+# @(#)34      1.15.1.3  src/bos/etc/rc.bootc/rc.bootc.sh, cmdcorral, bos71F, 1134A_71F 8/1/11 15:30:39
+# Commands
+DSPMSG=/usr/bin/dspmsg
+MOUNT=/usr/sbin/mount 
+RM=/usr/bin/rm
+METHODS=/usr/lib/methods
+WPARLIB=/usr/lib/wpars
+
+DEVCFG=${WPARLIB}/devcfg
+CFGCON=${METHODS}/cfgcon
+CONCFG=0
+CFGPTY=${METHODS}/wpar_cfgpty
+PTYCFG=0
+UCFGPTY=${METHODS}/wpar_ucfgpty
+CFGRANDOM=/usr/sbin/randomctl 
+RANDOMCFG=0
+CFGPSEUDO=${METHODS}/wpar_cfgpseudo
+CFGMGR=/usr/sbin/cfgmgr
+WPARDEVSTOP=/usr/lib/wpars/wpardevstop
+CFGVG=/usr/sbin/cfgvg
+WPARREGSCRIPT=/usr/lib/wpars/wpar_reg_script
+
+ALOG=/usr/bin/alog
+
+devcfg_cleanup() {
+   typeset mode=$1 
+   typeset exrc
+
+  typeset DEVSCFGD=$((CONCFG+PTYCFG+RANDOMCFG))
+  
+  if [[ $mode -eq 0 ]]; then
+      exrc=3
+  else
+      exrc=2
+  fi
+
+  if [[ $DEVSCFGD -eq $exrc ]]; then
+    # All device configuration proceeded correctly
+    $DEVCFG -o
+  else
+    # Some device configuration failed - roll back as necessary
+    if [[ $CONCFG -eq 1 ]]; then
+      $CFGCON -s
+    fi
+    if [[ $PTYCFG -eq 1 ]]; then
+      $UCFGPTY -l pty0
+    fi
+    if [[ $RANDOMCFG -eq 1 ]]; then
+      $CFGRANDOM -u
+    fi
+
+    # ...and signal that device config failed
+    $DEVCFG -e
+  fi
+
+}
+
+#################################################################
+## This script is executed by init during corral boot. It should 
+## be the first record in the  /etc/inittab file.
+#################################################################
+
+if [ "$1" == "-r" ]; then
+
+#################################################################
+## Calling this script with option -r has a special significance
+## It is intended for WPAR mobility. Do not edit this section.
+#################################################################
+
+	# Configure the console.
+	$CFGCON && CONCFG=1
+
+	if [[ $? -eq 0 && -w /dev/console ]]; then
+	   exec 1> /dev/console    # dup standard out to console 
+	   exec 2> /dev/console    # dup standard error to console
+	else
+	   exec 1> /dev/null       # dup standard out to bit bucket
+	   exec 2> /dev/null       # dup standard error to bit bucket
+	fi
+
+	# Import all devices
+	$CFGPSEUDO > /dev/console 2>&1
+	$CFGPTY -l pty0 2>/dev/null && PTYCFG=1
+	$CFGRANDOM -l 2>/dev/null && RANDOMCFG=1
+	
+	# Also execute rc.security.boot as entries from /etc/initab 
+	# would not executed if the script exists
+
+	if  [ -f /etc/rc.security.boot ]; then
+		/etc/rc.security.boot -r
+        	RC=$?
+	else
+		RC=0
+	fi
+
+	$WPARREGSCRIPT -e -p 1 > /dev/null 2>&1
+
+    devcfg_cleanup 0
+
+	if [ $RC -eq 0 ]; then 
+		exit 0
+	else
+		exit 1
+	fi
+#################################################################
+## Section over.
+#################################################################
+fi
+
+#
+# "-1r" is for the first phase of boot of a RootVG WPAR
+#
+if [ "$1" == "-1r" ]; then
+#################################################################
+## Calling this script with option -1r has a special significance
+## It is intended for WPAR mobility. Do not edit this section.
+#################################################################
+
+
+	# Import all devices was done at
+	# the prepare of the arrival node.
+	PTYCFG=1
+	RANDOMCFG=1
+
+	# Also execute rc.security.boot as entries from /etc/initab 
+	# would not executed if the script exists
+
+	if  [ -f /etc/rc.security.boot ]; then
+		/etc/rc.security.boot -r
+        	RC=$?
+	else
+		RC=0
+	fi
+
+    devcfg_cleanup 1
+
+	if [ $RC -eq 0 ]; then 
+		exit 0
+	else
+		exit 1
+	fi
+fi
+#################################################################
+## Section over.
+#################################################################
+
+#
+# "-2r" is for the 2nd phase of boot of a RootVG WPAR where
+# we only configure the console
+#
+if [ "$1" == "-2r" ]; then
+#################################################################
+## Calling this script with option -2r has a special significance
+## It is intended for WPAR mobility. Do not edit this section.
+#################################################################
+	# Configure the console.
+	$CFGCON && CONCFG=1
+
+	if [[ $? -eq 0 && -w /dev/console ]]; then
+	   exec 1> /dev/console    # dup standard out to console 
+	   exec 2> /dev/console    # dup standard error to console
+	else
+	   exec 1> /dev/null       # dup standard out to bit bucket
+	   exec 2> /dev/null       # dup standard error to bit bucket
+	fi
+
+	$WPARREGSCRIPT -e -p 1 > /dev/null 2>&1
+
+	exit 0
+fi
+#################################################################
+## Section over.
+#################################################################
+
+
+# Configure the console.
+$CFGCON && CONCFG=1
+
+if [[ $? -eq 0 && -w /dev/console ]]; then
+   exec 1> /dev/console    # dup standard out to console 
+   exec 2> /dev/console    # dup standard error to console
+else
+   exec 1> /dev/null       # dup standard out to bit bucket
+   exec 2> /dev/null       # dup standard error to bit bucket
+fi
+
+# Import all devices
+$CFGPSEUDO > /dev/console 2>&1
+
+# The usual fanfare.
+$DSPMSG rc.cat 1 'Starting Multi-user Initialization\n' | $ALOG -t boot
+
+# Remove /etc/nologin if left behind by shutdown
+$RM -f /etc/nologin
+
+# Execute configuration manager
+# Due to multipath issue in wpar, we moved WPARDEVSTOP out to 
+# startwpar right before starting of subsys. 
+# $WPARDEVSTOP > /dev/null 2>&1
+$CFGMGR -v
+$CFGVG
+
+# Mount all remaining file systems in /etc/filesystems that are set 
+# to auto-mount
+$DSPMSG rc.cat 4 'Performing all automatic mounts \n' | $ALOG -t boot
+$MOUNT all 2>&1 | $ALOG -t boot
+$CFGPTY -l pty0 2>/dev/null && PTYCFG=1
+$CFGRANDOM -l 2>/dev/null && RANDOMCFG=1
+# Running expreserve to recover vi editor sessions
+/usr/lib/expreserve - 2>/dev/null
+
+# Done.
+
+# Start the error daemon inside WPAR
+
+if [ -x /usr/lib/errdemon ]
+then
+        echo "Starting the error daemon" | $ALOG -t boot
+        /usr/bin/rm -f /tmp/errdemon.$$
+        /usr/lib/errdemon >/tmp/errdemon.$$ 2>&1
+        if [ $? -ne 0 ]
+        then
+                cat /tmp/errdemon.$$ | $ALOG -t boot
+                echo "Starting the errdemon with the wpar default" \
+                        "log file, /var/adm/ras/errlog." | $ALOG -t boot
+                /usr/lib/errdemon -i /var/adm/ras/errlog
+        fi
+        /usr/bin/rm -f /tmp/errdemon.$$
+fi
+
+devcfg_cleanup 0
+
+$DSPMSG rc.cat 5 'Multi-user initialization completed\n' | $ALOG -t boot
+exit 0

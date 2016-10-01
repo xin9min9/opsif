@@ -1,0 +1,134 @@
+#!/bin/ksh
+# IBM_PROLOG_BEGIN_TAG 
+# This is an automatically generated prolog. 
+#  
+# tcpip61F src/tcpip/etc/rc.tcptr 1.2 
+#  
+# Licensed Materials - Property of IBM 
+#  
+# COPYRIGHT International Business Machines Corp. 2007,2008 
+# All Rights Reserved 
+#  
+# US Government Users Restricted Rights - Use, duplication or 
+# disclosure restricted by GSA ADP Schedule Contract with IBM Corp. 
+#  
+# @(#)82        1.2  src/tcpip/etc/rc.tcptr, tcp_apps, tcpip61F, 0833A_61F 7/11/08 11:56:07
+# IBM_PROLOG_END_TAG 
+####################################################################
+# 
+# ALERT:
+# 
+# ######  ####### #     # ### #######    ####### ######  ### #######
+# #     # #     # ##    # ###    #       #       #     #  #     #
+# #     # #     # # #   #  #     #       #       #     #  #     #
+# #     # #     # #  #  # #      #       #####   #     #  #     #
+# #     # #     # #   # #        #       #       #     #  #     #
+# #     # #     # #    ##        #       #       #     #  #     #
+# ######  ####### #     #        #       ####### ######  ###    #
+# 
+# Any changes to this file will be removed during packaging updates.
+# 
+####################################################################
+#
+# COMPONENT_NAME: TCPIP rc.tcptr
+#
+# FUNCTIONS:
+#
+# ORIGINS: 27
+#
+# (C) COPYRIGHT International Business Machines Corp. 2008
+# All Rights Reserved
+# Licensed Materials - Property of IBM
+#
+# US Government Users Restricted Rights - Use, duplication or
+# disclosure restricted by GSA ADP Schedule Contract with IBM Corp.
+#
+####################################################################
+# rc.tcptr -
+#       This script called explicitly in /etc/rc.tcpip prior to
+#       TCP daemon initialization.
+#       
+#       starts TCP TR policies located in /etc/.tcptr.policies
+# 
+# ###############################################
+# #  This script supports the reactivation of  ##
+# #  TCP Traffic Regulation Policies  created  ##
+# #  by the 'tcptr' command.   These policies  ##
+# #  will be invoked  automatically on reboot  ##
+# #  via this 'rc.tcptr' script called  prior  ##
+# #  to  TCP  inet  services  initialization.  ##
+# #                                            ##
+# #  Problems are logged to:                   ##
+# #      /var/adm/ras/tcptr.error              ##
+# ###############################################
+# 
+####################################################################
+
+umask 177
+
+########################################
+## Log all errors to /var/adm/ras:    ##
+########################################
+TCPTR_ERROR_FILE="/var/adm/ras/tcptr.error"
+TCPTR_SORT_FILE="/etc/.tcptr.sort"
+TCPTR_POLICIES_FILE="/etc/.tcptr.policies"
+COUNT=1
+
+if [[ -f $TCPTR_POLICIES_FILE ]]
+then
+    ####################################
+    ## Preliminary setup...           ##
+    ####################################
+    echo "Starting TCP Traffic Regulation:"
+    trap 'echo "Finished starting TCP TR policies."' 0
+
+    /usr/bin/rm -f $TCPTR_ERROR_FILE > /dev/null 2>&1
+    /usr/bin/rm -f $TCPTR_SORT_FILE > /dev/null 2>&1
+
+    ####################################
+    ## First sort the policy file...  ##
+    ####################################
+    /usr/bin/sort -n $TCPTR_POLICIES_FILE > $TCPTR_SORT_FILE 2>/dev/null
+    if [[ $? -ne 0 ]] 
+    then 
+        echo "Sort Failed." >> $TCPTR_ERROR_FILE 
+        exit 1 
+    fi
+
+    /usr/bin/rm -f $TCPTR_POLICIES_FILE > /dev/null 2>&1
+    if [[ $? -ne 0 ]] 
+    then 
+        echo "Remove Failed." >> $TCPTR_ERROR_FILE 
+        exit 1 
+    fi
+
+    ####################################
+    ## Now read and create policies:  ##
+    ####################################
+    while read item
+    do
+        /usr/sbin/tcptr -add $item > /dev/null 2>&1
+        if [[ $? -ne 0 ]]
+        then
+            RC=1
+            while [[ $RC -ne 0 ]] &&
+                  [[ $COUNT -le 3 ]]
+            do
+                sleep $COUNT
+                /usr/sbin/tcptr -add $item > /dev/null 2>&1
+                RC=$?
+                COUNT=$(( $COUNT + 1 ))
+            done
+            [[ $RC -ne 0 ]] && echo "Create Policy Failed: $item" >> $TCPTR_ERROR_FILE
+            COUNT=1
+        fi
+    done < $TCPTR_SORT_FILE
+    if [[ $? -ne 0 ]] 
+    then 
+        echo "While Failed." >> $TCPTR_ERROR_FILE 
+        exit 1 
+    fi
+    /usr/bin/rm -f $TCPTR_SORT_FILE > /dev/null 2>&1
+fi
+
+exit 0

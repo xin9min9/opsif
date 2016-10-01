@@ -1,0 +1,80 @@
+#!/usr/bin/ksh
+# IBM_PROLOG_BEGIN_TAG 
+# This is an automatically generated prolog. 
+#  
+# bos61D src/bos/etc/rc.corrals/rc.corrals.sh 1.6 
+#  
+# Licensed Materials - Property of IBM 
+#  
+# COPYRIGHT International Business Machines Corp. 2005,2007 
+# All Rights Reserved 
+#  
+# US Government Users Restricted Rights - Use, duplication or 
+# disclosure restricted by GSA ADP Schedule Contract with IBM Corp. 
+#  
+# @(#)28      1.6  src/bos/etc/rc.corrals/rc.corrals.sh, cmdcorral, bos61D, d2008_02A9 12/3/07 16:05:38
+# IBM_PROLOG_END_TAG 
+
+########################################################################
+## Function: inc() (increment variable by 1)
+## Parameters: Name of Numeric Variable 
+########################################################################
+inc()
+{
+    # increment variable by 1
+    typeset -i CUR_VALUE=0
+    typeset -i NEW_VALUE=0
+
+    eval CUR_VALUE="$"$1
+    (( NEW_VALUE = $CUR_VALUE + 1 ))
+    eval $1=$NEW_VALUE
+
+    return 0
+
+}   # end of inc()
+
+########################################################################
+# Commands
+########################################################################
+STARTCMD=/usr/sbin/startwpar
+LOGCMD=/usr/lib/wpars/corlogevent
+REFRESHCMD=/usr/lib/wpars/refreshindexfile
+LSCMD=/usr/sbin/lswpar
+INDEXFILE=/etc/wpars/index
+
+########################################################################
+## Variables
+########################################################################
+GOODSTART=0
+BADSTART=0
+TOTAL=0
+LOGLABEL="/etc/rc.wpars"
+
+########################################################################
+## Main 
+########################################################################
+
+# If no WPAR activity has ever happened on this system, the index file won't be
+# present.  If all WPARs have been deleted, the index file will be empty.  In
+# either case, there's no point proceeding.
+[[ -s $INDEXFILE ]] || exit 0
+
+$LOGCMD -m "Refreshing the index file" "$LOGLABEL" 
+$REFRESHCMD
+
+$LOGCMD -m "Starting all workload partitions" "$LOGLABEL" 
+
+LANG=C $LSCMD -qca name,auto -d ' ' | while read cname auto junk
+do 
+  if [[ $auto = [Yy]* ]]; then
+     $STARTCMD -v $cname > /dev/null 2>&1 
+     [[ $? -eq 0 ]] && inc GOODSTART || inc BADSTART
+  fi
+done
+
+(( TOTAL = $GOODSTART + $BADSTART ))
+$LOGCMD -m "Number of wpar starts attempted ---> ${TOTAL}" "$LOGLABEL"
+$LOGCMD -m "Number of wpar successful starts --> ${GOODSTART}" "$LOGLABEL"
+$LOGCMD -m "Number of wpar failed starts ------> ${BADSTART}" "$LOGLABEL"
+
+exit 0

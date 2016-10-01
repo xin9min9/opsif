@@ -1,0 +1,103 @@
+#!/usr/bin/ksh
+# IBM_PROLOG_BEGIN_TAG 
+# This is an automatically generated prolog. 
+#  
+# bos610 src/bos/etc/rc.powerfail/rc.powerfail.sh 1.26 
+#  
+# Licensed Materials - Property of IBM 
+#  
+# COPYRIGHT International Business Machines Corp. 1992,1995 
+# All Rights Reserved 
+#  
+# US Government Users Restricted Rights - Use, duplication or 
+# disclosure restricted by GSA ADP Schedule Contract with IBM Corp. 
+#  
+# @(#)04  1.26  src/bos/etc/rc.powerfail/rc.powerfail.sh, cmdoper, bos610 1/19/06 12:49:47
+# IBM_PROLOG_END_TAG 
+# For safety sync the system before processing any further lines.
+/usr/sbin/sync
+/usr/sbin/sync
+/usr/sbin/sync
+#
+#
+# COMPONENT_NAME: (CMDOPER) commands needed for basic system needs
+#
+# FUNCTIONS: rc.powerfail
+#
+# ORIGINS: 27, 83
+#
+# (C) COPYRIGHT International Business Machines Corp. 1992, 2006.
+# All Rights Reserved
+# Licensed Materials - Property of IBM
+#
+# US Government Users Restricted Rights - Use, duplication or
+# disclosure restricted by GSA ADP Schedule Contract with IBM Corp.
+#
+# LEVEL 1,  5 Years Bull Confidential Information
+#
+###################################################################
+#
+# Name	  : rc.powerfail
+# Purpose : This script will be used to take required actions
+#	    at power failure situations. This script will only
+#	    deal with RPA defined Environmental and Power Warning
+#	    (EPOW) Events only. The required actions for each of
+#	    the EPOW event will be taken by this script, to ensure
+#	    clean shutdown of the system.
+#
+# This script is called by default from init if the epow_handler
+# detects an error from the primary power supply. Depending on the
+# condition of this error, the epow_handler will send a SIGPWR to
+# init, which will in turn call the command on the powerfail line
+# of /etc/inittab. The default command is:
+# "sh /etc/rc.powerfail > /dev/console 2>&1"	
+
+# This script checks the platform type and invokes the platform
+# specific rc.powerfail command which will take care of handling
+# the EPOW Events.
+#
+##################################################################
+
+# This indicates that any shutdown initiated from this script was
+# caused because of a powerfail condition.
+export EPOW_SHUTDOWN=true
+
+# The following is a work around for init.  This script/command uses 
+# Korn Shell specific expressions. Currently, init call all commands 
+# with /bin/sh, which may or may not be linked to /bin/ksh. If it is 
+# not, then these steps must be taken in order to ensure that 
+# rc.powerfail will work as expected.
+
+if [ "$1" != "_!.!.!.!." ]
+then
+	exec rc.powerfail _!.!.!.!. $*
+fi
+
+shift
+
+############################################################
+#
+# Exit Status
+#
+# 0 - No system shutdown/halt
+# 1 - Platform specific command failed
+#
+############################################################
+
+sys_type=`/usr/sbin/bootinfo -p`
+
+# We support only CHRP architectures, from AIX 5.3. Hence, 
+# the below case strucuture will currently be implemented 
+# only with chrp.
+ 
+case $sys_type in
+	"chrp")
+		/usr/lib/boot/bin/rc.powerfail_chrp $*
+		if [ $? -eq 0 ]
+		then
+			exit 0
+		else
+			exit 1
+		fi
+		;;
+esac

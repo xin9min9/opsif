@@ -1,0 +1,21 @@
+#!/bin/sh
+#
+# All Rights Reserved, Copyright (C) 2001, 2009, Hitachi, Ltd.
+#
+
+# Get install path
+ if [ -f /etc/.HBaseAgent/Path00 ] ; then
+    HBSAPATH=`/usr/bin/cat /etc/.HBaseAgent/Path00 2>/dev/null | /usr/bin/grep "^HBSA_DIR=" | /usr/bin/sed 's/^HBSA_DIR=//'`
+ fi
+ if [ "$HBSAPATH" = "" ] ; then
+    HBSAPATH="/usr/HDVM/HBaseAgent"
+ fi
+
+#
+# terminate hbsa_service daemon
+#
+if test -x $HBSAPATH/bin/hbsasrv 
+then
+    $HBSAPATH/bin/hbsasrv stop -f > /dev/null 2>&1
+fi
+exit 0

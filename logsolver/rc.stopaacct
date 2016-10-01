@@ -1,0 +1,26 @@
+#!/bin/ksh
+# IBM_PROLOG_BEGIN_TAG 
+# This is an automatically generated prolog. 
+#  
+# bos610 src/bos/etc/rc/rc.stopaacct.sh 1.1 
+#  
+# Licensed Materials - Property of IBM 
+#  
+# COPYRIGHT International Business Machines Corp. 2004 
+# All Rights Reserved 
+#  
+# US Government Users Restricted Rights - Use, duplication or 
+# disclosure restricted by GSA ADP Schedule Contract with IBM Corp. 
+#  
+# @(#)83	1.1  src/bos/etc/rc/rc.stopaacct.sh, cmdaacct, bos610 4/25/04 11:38:14
+# IBM_PROLOG_END_TAG 
+
+
+/usr/bin/acctctl off
+
+# leave project definitions loaded, so that project names are persistent
+
+/usr/bin/projctl unldadm
+/usr/bin/projctl unldusr
+/usr/bin/projctl unldgrp
+

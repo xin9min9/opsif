@@ -1,0 +1,93 @@
+#!/usr/bin/ksh
+# IBM_PROLOG_BEGIN_TAG 
+# This is an automatically generated prolog. 
+#  
+# bos610 src/bos/usr/sbin/dacinet/rc.dacinet.sh 1.3 
+#  
+# Licensed Materials - Property of IBM 
+#  
+# Restricted Materials of IBM 
+#  
+# COPYRIGHT International Business Machines Corp. 1998,2002 
+# All Rights Reserved 
+#  
+# US Government Users Restricted Rights - Use, duplication or 
+# disclosure restricted by GSA ADP Schedule Contract with IBM Corp. 
+#  
+# @(#)27	1.3  src/bos/usr/sbin/dacinet/rc.dacinet.sh, cmdsadm, bos610 8/31/02 15:36:32
+# IBM_PROLOG_END_TAG 
+# 
+# Startup script for DACinet (Discretionary access control for internet ports)
+#
+# exit codes interpreted by the following mask:
+# 	bit 0	not CAPP/EAL4+ host (exit code = 1)
+#	bit 1	warning: non fatal error in processing /etc/security/priv
+#	bit 2	warning: non fatal error in processing /etc/security/services
+#	bit 3	warning: non fatal error in processing /etc/security/acl
+
+typeset -i rc
+typeset -i status
+unset PATH
+export PATH=/usr/bin:/etc:/usr/sbin:/sbin:/usr/ucb
+
+# set services specified in /etc/security/priv to be privileged
+#
+privinit()
+{
+	rc=0
+        for port in $(sed 's/#.*$//' /etc/security/priv)
+        do
+		# make them privileged
+                dacinet setpriv $port || rc=$?
+        done
+	return $rc
+}
+
+# no access restrictions on tcp ports in /etc/security/services
+#
+servinit()
+{
+	rc=0
+        for port in $(sed -e 's/#.*$//' -e 's,/, ,' /etc/security/services |\
+	awk '$3=="tcp" { print $2 }')
+        do
+		# hostaddr just a placeholder; only prefix length is used
+                dacinet acladd $port 255.255.255.255/0 || rc=$?
+        done
+	return $rc
+}
+
+# Initialize ACLs with entries from /etc/security/acl
+#
+aclinit()
+{
+	rc=0
+        sed -e 's/#.*$//' -e '/^[ 	]*$/d' /etc/security/acl |\
+	while read args
+	do
+		dacinet acladd $args || rc=$?
+	done
+	return $rc
+}
+
+# is host configured for CAPP/EAL4+
+isCChost || exit 1
+
+status=0
+
+# make services in /etc/security/priv privileged
+if [ -f /etc/security/priv ] ; then
+	privinit || status=$status+2
+fi
+
+# make services in /etc/security/services available to any user
+if [ -f /etc/security/services ] ; then
+	servinit || status=$status+4
+fi
+
+# add acl records for entries in /etc/security/acl
+if [ -f /etc/security/acl ] ; then
+	aclinit || status=$status+8
+fi
+
+exit $status

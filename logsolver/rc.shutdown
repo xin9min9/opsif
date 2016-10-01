@@ -1,0 +1,7 @@
+#!/bin/ksh
+#CT_NODE_RUNSTATE_BEGIN: Do not modify this section manually
+   if [[ -f /usr/sbin/rsct/bin/ct_node_runstate ]]
+   then
+        /usr/sbin/rsct/bin/ct_node_runstate -w SHUTDOWN
+   fi
+#CT_NODE_RUNSTATE_END:

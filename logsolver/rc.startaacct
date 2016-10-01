@@ -1,0 +1,20 @@
+#!/bin/ksh
+# IBM_PROLOG_BEGIN_TAG 
+# This is an automatically generated prolog. 
+#  
+# bos610 src/bos/etc/rc/rc.startaacct.sh 1.1 
+#  
+# Licensed Materials - Property of IBM 
+#  
+# COPYRIGHT International Business Machines Corp. 2004 
+# All Rights Reserved 
+#  
+# US Government Users Restricted Rights - Use, duplication or 
+# disclosure restricted by GSA ADP Schedule Contract with IBM Corp. 
+#  
+# @(#)82	1.1  src/bos/etc/rc/rc.startaacct.sh, cmdaacct, bos610 4/25/04 11:37:28
+# IBM_PROLOG_END_TAG 
+
+
+/usr/bin/projctl ld
+/usr/bin/acctctl on

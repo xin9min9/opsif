@@ -1,0 +1,84 @@
+#!/usr/bin/ksh
+# IBM_PROLOG_BEGIN_TAG 
+# This is an automatically generated prolog. 
+#  
+# bos71F src/bos/etc/rc.trustedboot/rc.trustedboot.sh 1.4 
+#  
+# Licensed Materials - Property of IBM 
+#  
+# COPYRIGHT International Business Machines Corp. 2011 
+# All Rights Reserved 
+#  
+# US Government Users Restricted Rights - Use, duplication or 
+# disclosure restricted by GSA ADP Schedule Contract with IBM Corp. 
+#  
+# IBM_PROLOG_END_TAG 
+# @(#)86        1.4  src/bos/etc/rc.trustedboot/rc.trustedboot.sh, cmdstss, bos71F, 1134A_71F 7/29/11 09:51:58
+
+
+# Do nothing until trusted-boot is enabled
+if [ "$(bootinfo -V)" -ne 1 ]
+then
+	exit 0
+fi
+
+lslpp -l | grep powerscStd.vtpm.rte >/dev/null 2>/dev/null
+if [ $? -ne 0 ]
+then
+        echo "Please install the powerscStd.vtpm package."
+        echo "This can be found on the PowerSC Standard Edition LPP."
+        exit 1
+fi
+
+# Retrieve the log from vTPM driver
+echo "Retrieving trusted boot event log"
+/usr/lib/tpm/bin/geteventlog
+if [ $? -ne 0 ]
+then
+	echo "geteventlog failed, TCSD won't be started."
+	exit 1
+fi
+
+if [ -f /var/adm/ras/teboot.log ]
+then
+	cat /var/adm/ras/teboot.log >> /var/adm/ras/trustedboot.log
+fi
+
+lssrc -s tcsd > /dev/null 2>&1
+if [ $? -ne 0 ]
+then
+
+# The daemon switches to user 'daemon'
+	USERNAME=root
+
+	mkssys -p /usr/sbin/tcsd -s tcsd -u ${USERNAME} \
+	       -e /var/adm/ras/trousers/tcsd.err \
+	       -o /var/adm/ras/trousers/tcsd.out \
+	       -a "-f" -S -f 15 -n 9 -R
+
+	if [ $? -ne 0 ]
+	then
+		echo "Failed to create tcsd SRC subsystem. TCSD will be disabled"
+		exit 1
+	fi
+fi
+
+startsrc -s tcsd
+
+# delay a little...
+echo "Waiting for tcsd to become ready..."
+for i in 1 2 3 4 5
+do
+	tpm_version > /dev/null 2>&1
+	if [ $? -eq 0 ]
+	then
+		echo "  ... ok"
+		break
+	fi
+	sleep 1
+done
+
+# Is effective only first time
+tpm_takeownership -y -z > /dev/null 2>&1
+
+exit 0

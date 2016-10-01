@@ -1,0 +1,175 @@
+#!/bin/ksh
+# IBM_PROLOG_BEGIN_TAG 
+# This is an automatically generated prolog. 
+#  
+# onc61H src/oncplus/etc/rc.nfs4ss.sh 1.5 
+#  
+# Licensed Materials - Property of IBM 
+#  
+# COPYRIGHT International Business Machines Corp. 2006,2008 
+# All Rights Reserved 
+#  
+# US Government Users Restricted Rights - Use, duplication or 
+# disclosure restricted by GSA ADP Schedule Contract with IBM Corp. 
+#  
+# @(#)62        1.5  src/oncplus/etc/rc.nfs4ss.sh, onccmds, onc61H, 0902A_61H 12/16/08 14:37:13
+# IBM_PROLOG_END_TAG 
+#
+# COMPONENT_NAME: nfs4
+#
+# FUNCTIONS: NFSv4 Grace Period Stable Storage startup 
+#
+# ORIGINS: 27
+#
+
+DSPMSG=/usr/bin/dspmsg
+MSGCAT=cmdnfs.cat
+MSGSET=67
+GPBYPASS_FLAG="gpbypass"
+GPON_FLAG="gp on"
+SS_VERIFY_CMD=/usr/sbin/nfs4smctl
+SS_LOAD_CMD=/usr/sbin/nfs4smctl
+SS_LOG_FILE=sm4.grace
+NFS_EXT=/usr/lib/drivers/nfs.ext
+
+#
+# This function cleans up the stable storage directory
+# of all files.
+#
+cleanup_ss_dir()
+{
+target_dir=$1
+
+	if [ -d $target_dir ]; then
+		/usr/bin/rm $target_dir/* 2>&1 > /dev/null
+		$DSPMSG -s $MSGSET $MSGCAT 10 'Cleanup of NFSv4 Stable Storage complete.\n'
+	fi
+}
+
+#
+# This function marks the stable storage log control file as being bad.
+#
+mark_ss_bad()
+{
+target_dir=$1
+
+	if [ -d $target_dir ]; then
+		#
+		# overwriting log file with NULL will mark the
+		# file as bad.
+		#
+		echo "" > $target_dir/$SS_LOG_FILE 2>&1 > /dev/null 
+		$DSPMSG -s $MSGSET $MSGCAT 10 'Cleanup of NFSv4 Stable Storage complete.\n'
+	fi
+}
+#
+# This function loads the NFS extension into the kernel and then loads the
+# stable storage into the extension.
+#
+load_ss()
+{
+target_dir=$1
+
+	if [ -x $NFS_EXT ]; then
+		$DSPMSG -s $MSGSET $MSGCAT 4 'Loading NFSv4 Stable Storage...'
+
+		`$SS_LOAD_CMD -L -P $SS_PATH` 
+			
+		if [ $? -eq 0 ]; then
+			$DSPMSG -s $MSGSET $MSGCAT 5 'Load successful.\n'
+		else
+			$DSPMSG -s $MSGSET $MSGCAT 6 'Load failed.\n'
+		fi
+	fi
+}
+
+# ---------------------------------------------------------------------	#
+# ------			MAIN				 ------	#
+# --------------------------------------------------------------------- #
+
+#
+# Start by getting the CMD arguments for nfsd.
+# and determine if stable storage is mounted
+#
+cmdargs=`odmget -q subsysname=nfsd SRCsubsys 2>/dev/null | grep cmdargs | sed 's/[[:space:]]*cmdargs[[:space:]]*=[[:space:]]*//' `
+
+# 
+# Find the SS Mount Point
+#
+
+SAVED_NFSD_ARGS=`/usr/bin/odmget -q subsysname=nfsd SRCsubsys | /bin/awk 'BEGIN { FS="\"" } /cmdargs/ { print $2 }' `
+
+SS_PATH=`echo ${SAVED_NFSD_ARGS} | /bin/awk '
+        { split($0, A);
+        for ( I = 1; I < NF; I++ ) {
+                if (A[I] == "-P") {
+                        I++;
+                        print A[I];
+                        continue;
+                }
+        }
+}'`
+
+SS_MOUNT_PT=`/usr/bin/df ${SS_PATH} | /bin/awk '
+	BEGIN { flag=0; }
+        { if (!flag)
+        { flag=1; next; }
+        if (flag) { print $7; }
+        }'`
+
+#
+# Pad the mount pt. with spaces
+#
+
+MOD_SS_MNT_PT=`echo ${SS_MOUNT_PT} | /bin/awk '
+	 { printf(" %s ", $1) }'`
+	
+
+dirmount=`/usr/sbin/mount 2>/dev/null | grep "$MOD_SS_MNT_PT" 2>/dev/null`
+
+#
+# If we were able to get nfsd CMD arguments, check for GP turned on
+#
+if [ -n "$cmdargs" ] ; then
+	GPON=`echo $cmdargs | grep "$GPON_FLAG"`
+	if [ -n "$GPON" ]; then
+		$DSPMSG -s $MSGSET $MSGCAT 7 'Checking NFSv4 Stable Storage.\n'
+		#
+		# GP is turned on, but now check to see if GP bypass 
+		# has been set
+		#
+		GPBYPASS=`echo $cmdargs | grep "$GPBYPASS_FLAG"`
+		if [ -n "$GPBYPASS" ]; then
+			# 
+			# remove the contents of the stable storage dir
+			#
+			$DSPMSG -s $MSGSET $MSGCAT 8 'Bypassing NFSv4 Grace Period.\n'
+			cleanup_ss_dir $SS_PATH
+		else
+			#
+			# Make sure the stable storage directory is mounted 
+			# before we try to verify and load it.
+			#
+			if [ -z "$dirmount" ]; then
+				$DSPMSG -s $MSGSET $MSGCAT 9 'NFSv4 Stable Storage not mounted.\n'
+			elif [ -x $SS_VERIFY_CMD ]; then
+				#
+				# Verify the Stable Storage.
+				#
+				$SS_VERIFY_CMD -V -P $SS_PATH 
+				if [ $? -eq 0 ]; then
+					# 
+					# stable storage is Good.
+					#
+					load_ss $SS_PATH
+				else
+					#
+					# stable storage is Bad.
+					# mark it so
+					#
+					mark_ss_bad $SS_PATH
+				fi
+			fi
+		fi
+	fi
+fi

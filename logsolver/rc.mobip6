@@ -1,0 +1,249 @@
+#!/usr/bin/ksh
+# IBM_PROLOG_BEGIN_TAG 
+# This is an automatically generated prolog. 
+#  
+# bos61B src/bos/etc/rc.mobip6/rc.mobip6.sh 1.7 
+#  
+# Licensed Materials - Property of IBM 
+#  
+# Restricted Materials of IBM 
+#  
+# COPYRIGHT International Business Machines Corp. 2002,2007 
+# All Rights Reserved 
+#  
+# US Government Users Restricted Rights - Use, duplication or 
+# disclosure restricted by GSA ADP Schedule Contract with IBM Corp. 
+#  
+# @(#)71  1.7  src/bos/etc/rc.mobip6/rc.mobip6.sh, sysmobip6, bos61B, b2007_33A0 7/25/07 14:40:28
+# IBM_PROLOG_END_TAG 
+
+####################################################################
+# rc.mobip6 : enable or disable Mobile IPv6
+#
+# Usage: rc.mobip6 {start [-H] | stop [-N] [-F]}"
+#   -H : enable the system as a Mobile IPv6 home agent and correspondent node
+#   -N : stop the ndpd-router daemon
+#   -F : disable IPv6 forwarding
+#
+
+# To enable/disable the support of mobiles implementing the draft #13 of the
+# "Mobility support in IPv6" specification, set/unset the following variable.
+# 0 = disabled (default), 1 = enabled.
+Enable_Draft13_Mobile=0
+
+# To enable/disable checking of IP security authentication.
+# 0 = disabled, 1 = enabled (default).
+Check_IPsec=1
+
+_usage()
+{
+    echo "Usage: $0 {start [-H] | stop [-N] [-F]}"
+    exit 1
+}
+
+_start()
+{
+    # check that IPv6 mobility is not running
+    /usr/sbin/kmodctrl -Q
+    rc=$?
+    if [ $rc -eq 1 ] ; then
+        echo "IPv6 Mobility already loaded"
+        return 0
+    elif [ $rc -ne 0 ] ; then
+        echo "Error checking if the kernel extension is loaded."
+        RC=1
+    fi
+
+    # check that IPv6 is running
+    /usr/bin/netstat -rn -f inet6 | /usr/bin/grep "^ff01::/16" >/dev/null
+    if [ $? -ne 0 ] ; then
+        echo "Starting IPv6..."
+        /usr/sbin/autoconf6
+        if [ $? -ne 0 ] ; then
+            echo "Error starting IPv6: 'autoconf6' failed."
+            RC=1
+        fi
+    fi
+
+    # load kernel extension
+    /usr/sbin/kmodctrl -l >/dev/null
+    if [ $? -ne 0 ] ; then
+        echo "Error loading kernel extension: 'kmodctrl -l' failed."
+        RC=1
+    fi
+
+    if [ $Enable_Draft13_Mobile -eq 1 ] ; then
+        # activate the draft #13 compatibility
+        /usr/sbin/mobip6ctrl -c
+        if [ $? -ne 0 ] ; then
+            echo "Error configuring kernel extension: 'mobip6ctrl -c' failed."
+            RC=1
+        fi
+    fi
+
+    if [ $Check_IPsec -eq 1 ] ; then
+        # configure kernel extension to use IPsec 
+        /usr/sbin/mobip6ctrl -S 1
+        if [ $? -ne 0 ] ; then
+            echo "Error configuring kernel extension: 'mobip6ctrl -S 1' failed."
+            RC=1
+        fi
+    fi
+
+    if [ $HomeAgent -eq 1 ] ; then
+        # configure kernel extension to act as NDP proxy
+        /usr/sbin/mobip6ctrl -n 1
+        if [ $? -ne 0 ] ; then
+            echo "Error configuring kernel extension: 'mobip6ctrl -n 1' failed."
+            RC=1
+        fi
+
+        # re-start ndpd-router with new options
+LC_ALL=C /usr/bin/ps -e | /usr/bin/grep ndpd-router >/dev/null
+        if [ $? -eq 0 ] ; then
+            /usr/bin/stopsrc -s ndpd-router
+            if [ $? -ne 0 ] ; then
+                echo "Error stopping ndpd-router: 'stopsrc -s ndpd-router' failed."
+                RC=1
+            fi
+        fi
+        /usr/bin/startsrc -s ndpd-router -a "-H -m -D 4/1"
+        if [ $? -ne 0 ] ; then
+            echo "Error starting ndpd-router: 'startsrc -s ndpd-router -a \"-H -m -D 4/1\"' failed."
+            RC=1
+        fi
+
+        # add mobip6reqd into tcpip SRC group
+        /usr/bin/lssrc -s mobip6reqd >/dev/null
+        if [ $? -eq 0 ] ; then
+            /usr/bin/chssys -s mobip6reqd -G tcpip
+            if [ $? -ne 0 ] ; then
+                echo "Error adding mobip6reqd into tcpip SRC group: 'chssys -s mobip6reqd -G tcpip' failed."
+                RC=1
+            fi
+        fi
+
+        # start mobip6reqd
+LC_ALL=C /usr/bin/ps -e | /usr/bin/grep mobip6reqd >/dev/null
+        if [ $? -ne 0 ] ; then
+            /usr/bin/startsrc -s mobip6reqd
+            if [ $? -ne 0 ] ; then
+                echo "Error starting mobip6reqd: 'startsrc -s mobip6reqd' failed."
+                RC=1
+            fi
+        fi
+
+        # configure ip6forwarding
+        if [ -x /usr/sbin/no ] ; then
+            /usr/sbin/no -o ip6forwarding=1
+            if [ $? -ne 0 ] ; then
+                echo "Error enabling IPv6 routing: 'no -o ip6forwarding=1' failed."
+                RC=1
+            fi
+        fi
+    fi
+}
+
+_stop()
+{
+    # stop mobip6reqd
+LC_ALL=C /usr/bin/ps -e | /usr/bin/grep mobip6reqd >/dev/null
+    if [ $? -eq 0 ] ; then
+        /usr/bin/stopsrc -s mobip6reqd
+        if [ $? -ne 0 ] ; then
+            echo "Error stopping mobip6reqd: 'stopsrc -s mobip6reqd' failed."
+            RC=1
+        fi
+    fi
+
+    # remove mobip6reqd from tcpip SRC group
+    /usr/bin/lssrc -s mobip6reqd >/dev/null
+    if [ $? -eq 0 ] ; then
+        /usr/bin/chssys -s mobip6reqd -G ""
+        if [ $? -ne 0 ] ; then
+            echo "Error removing mobip6reqd from tcpip SRC group: 'chssys -s mobip6reqd -G \"\"' failed."
+            RC=1
+        fi
+    fi
+
+    # check if the kernel extension is loaded
+    /usr/sbin/kmodctrl -Q
+    if [ $? -eq 1 ] ; then
+        # reset bindings
+    	/usr/sbin/mobip6ctrl -R >/dev/null
+    	if [ $? -ne 0 ] ; then
+            echo "Error resetting binding cache: 'mobip6ctrl -R' failed."
+            RC=1
+    	fi
+
+        # unload kernel extension
+        /usr/sbin/kmodctrl -u >/dev/null
+        if [ $? -ne 0 ] ; then
+            echo "Error unloading kernel extension: 'kmodctrl -u' failed."
+            RC=1
+        fi
+
+        # unload mobip6.so library
+        /usr/sbin/slibclean
+    fi
+
+    # if ndpd-router is running in mobile mode, stop or restart it
+LC_ALL=C /usr/bin/ps -ef | /usr/bin/grep ndpd-router|/usr/bin/grep -v /usr/bin/grep|/usr/bin/grep "\-m" >/dev/null
+    if [ $? -eq 0 ] ; then
+        /usr/bin/stopsrc -s ndpd-router
+        if [ $? -ne 0 ] ; then
+            echo "Error stopping ndpd-router: 'stopsrc -s ndpd-router' failed."
+            RC=1
+        fi
+        if [ $StopNdpdRouter -eq 0 ] ; then
+            /usr/bin/startsrc -s ndpd-router
+            if [ $? -ne 0 ] ; then
+                echo "Error restarting ndpd-router: 'startsrc -s ndpd-router' failed."
+                RC=1
+            fi
+        fi
+    fi
+
+    # disable IPv6 routing if needed
+    if [ $StopIPv6Forwarding -eq 1 ] ; then
+        if [ -x /usr/sbin/no ] ; then
+            /usr/sbin/no -o ip6forwarding=0
+            if [ $? -ne 0 ] ; then
+                echo "Error disabling IPv6 routing: 'no -o ip6forwarding=0' failed."
+                RC=1
+            fi
+        fi
+    fi
+}
+
+RC=0
+HomeAgent=0
+StopNdpdRouter=0
+StopIPv6Forwarding=0
+[ $# -lt 1 ] && _usage
+action=$1; shift
+case $action in
+    'start')
+        while getopts HS opt
+        do
+            case $opt in
+                H) HomeAgent=1 ;;
+                *) _usage ;;
+            esac
+        done
+        _start ;;
+    'stop')
+        while getopts NF opt
+        do
+            case $opt in
+                N) StopNdpdRouter=1 ;;
+                F) StopIPv6Forwarding=1 ;;
+                *) _usage ;;
+            esac
+        done
+        _stop ;;
+    *)
+        _usage ;;
+esac
+
+exit $RC

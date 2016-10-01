@@ -1,0 +1,45 @@
+#!/usr/bin/ksh
+# IBM_PROLOG_BEGIN_TAG 
+# This is an automatically generated prolog. 
+#  
+# bos61B src/bos/etc/rc.ha_star/rc.ha_star.sh 1.3 
+#  
+# Licensed Materials - Property of IBM 
+#  
+# Restricted Materials of IBM 
+#  
+# COPYRIGHT International Business Machines Corp. 1999,2007 
+# All Rights Reserved 
+#  
+# US Government Users Restricted Rights - Use, duplication or 
+# disclosure restricted by GSA ADP Schedule Contract with IBM Corp. 
+#  
+# "@(#)75  1.3  src/bos/etc/rc.ha_star/rc.ha_star.sh, rasha, bos61B, b2007_34A0 7/31/07 06:56:02";
+# IBM_PROLOG_END_TAG 
+#
+#  @BULL_COPYRIGHT@
+#
+#  COMPONENT_NAME: (RASHA)
+#
+#  ORIGINS: 83
+#
+#  Copyright (C) Bull S.A. 1999
+#  LEVEL 1,5 Years Bull Confidential Information
+#
+
+#
+# The following is a work around for init.  This script/command uses Korn Shell
+# specific expressions.  Currently, init call all commands with /bin/sh, which
+# may or may not be linked to /bin/ksh.  If it is not, then these steps must be
+# taken in order to ensure that rc.ha_star will work as expected.
+if [ "$1" != "_!.!.!.!." ]
+then
+	exec /etc/rc.ha_star _!.!.!.!. $*
+fi
+
+shift
+
+#Launch ha_star
+/usr/sbin/ha_star
+
+#End of rc.ha_star

@@ -1,0 +1,58 @@
+#!/usr/bin/ksh
+# IBM_PROLOG_BEGIN_TAG 
+# This is an automatically generated prolog. 
+#  
+# bos610 src/bos/etc/rc.netwlm/rc.netwlm.sh 1.1 
+#  
+# Licensed Materials - Property of IBM 
+#  
+# Restricted Materials of IBM 
+#  
+# COPYRIGHT International Business Machines Corp. 2003 
+# All Rights Reserved 
+#  
+# US Government Users Restricted Rights - Use, duplication or 
+# disclosure restricted by GSA ADP Schedule Contract with IBM Corp. 
+#  
+# IBM_PROLOG_END_TAG 
+
+_usage()
+{
+    echo "Usage: $0 {start | stop }"
+    exit 1
+}
+
+_start()
+{
+    # load kernel extension
+    /usr/lib/methods/cfgnetwlm >/dev/null
+    if [ $? -ne 0 ] ; then
+        echo "Error loading kernel extension: cfgnetwlm failed."
+        RC=1
+    fi
+
+}
+
+_stop()
+{
+
+    # unload kernel extension
+    /usr/lib/methods/ucfgnetwlm >/dev/null
+    if [ $? -ne 0 ] ; then
+        echo "Error unloading kernel extension: ucfgnetwlm failed."
+        RC=1
+    fi
+
+}
+
+RC=0
+action=$1; shift
+case $action in
+    'start')
+        _start ;;
+    'stop')
+        _stop ;;
+    *)
+        _usage ;;
+esac
+exit $RC

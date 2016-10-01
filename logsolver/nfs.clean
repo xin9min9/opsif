@@ -1,0 +1,209 @@
+#!/bin/bsh
+# IBM_PROLOG_BEGIN_TAG 
+# This is an automatically generated prolog. 
+#  
+# onc610 src/oncplus/etc/nfs.clean.sh 1.3 
+#  
+# Licensed Materials - Property of IBM 
+#  
+# COPYRIGHT International Business Machines Corp. 1985,1989 
+# All Rights Reserved 
+#  
+# US Government Users Restricted Rights - Use, duplication or 
+# disclosure restricted by GSA ADP Schedule Contract with IBM Corp. 
+#  
+# IBM_PROLOG_END_TAG 
+#
+#   COMPONENT_NAME: onccmds
+#
+#   FUNCTIONS: none
+#
+#   ORIGINS: 27
+#
+#                    -- (                            when
+#   combined with the aggregated modules for this product)
+#   OBJECT CODE ONLY SOURCE MATERIALS
+#
+#   (C) COPYRIGHT International Business Machines Corp. 1985,1989
+#   All Rights Reserved
+#   US Government Users Restricted Rights - Use, duplication or
+#   disclosure restricted by GSA ADP Schedule Contract with IBM Corp.
+#
+
+# module name - nfs.clean
+#     removes NFS/NIS daemons
+#
+trap "exec > /dev/null ; exec 2> /dev/null" 13
+
+#
+# Flag semantics
+# -d		only shut down server-only daemons
+# -y		only shut down server-only NIS daemons
+# 		-y is not needed if -d is used.  -y without -d will
+#		shut down all NFS daemons, but only server NIS daemons.
+# -t nfs	only shut down nfs.  -d still applies
+# -t nis	only shut down nis.  -d and -y still apply.
+#
+
+GETOPT_CMD="/bin/getopt"
+DFLAG="R"
+NIS_FLAG="N"
+NFS="N"
+NIS="N"
+
+USAGE="Usage: nfs.clean [-d][-y][-t nfs|nis]\n"
+set -- `${GETOPT_CMD} dyt: $* 2>/dev/null`
+if [ $? != 0 ] ; then
+	dspmsg cmdnfs.cat -s 7 2 "${USAGE}"
+	exit 1
+fi
+
+while [ $1 != -- ]
+do
+   case "$1" in
+	"-d")
+	    DFLAG="D"
+	    shift
+	    ;;
+	"-y")
+	    NIS_FLAG="Y"
+	    shift
+	    ;;
+	"-t")
+	    case "$2" in
+		"nfs")
+			NFS="Y"
+			;;
+		"nis")
+			NIS="Y"
+			;;
+         	*)
+	   		dspmsg cmdnfs.cat -s 7 2 "${USAGE}"
+	   		exit 1
+	   		;;
+	    esac
+	    shift
+	    shift
+	    ;;
+         *)
+	   dspmsg cmdnfs.cat -s 7 2 "${USAGE}"
+	   exit 1
+	   ;;
+   esac
+done
+# check to make sure that there are no extra parameters
+shift	# get rid of the -- parameter
+if [ -n "$1" ] ; then  # something extra
+	dspmsg cmdnfs.cat -s 7 2 "${USAGE}"
+	exit 1
+fi
+
+#
+# If neither the nfs or nis flags were set, do the default of both
+#
+if [ "${NFS}" = "N" -a "${NIS}" = "N" ] ; then
+	NFS="Y"
+	NIS="Y"
+fi
+
+dspmsg cmdnfs.cat -s 7 1 'Stopping NFS/NIS Daemons\n'
+
+
+if [ "${NFS}" = "Y" ] ; then
+	# Stop nfsd daemon
+	if [ -f /usr/sbin/nfsd ]; then
+		stopsrc -f -s nfsd
+	fi
+
+	# Stop biod daemon if the "-d" flag was not set
+	if [ "${DFLAG}" = "R" ] ; then
+	   if [ -f /usr/sbin/biod ]; then
+		stopsrc -f -s biod
+	   fi
+	fi
+	# Stop rpc.lockd daemon if the "-d" flag was not set
+	if [ "${DFLAG}" = "R" ] ; then
+	   if [ -f /usr/sbin/rpc.lockd ]; then
+		stopsrc -f -s rpc.lockd
+	   fi
+	fi
+
+	# Stop rpc.statd daemon if the "-d" flag was not set
+	if [ "${DFLAG}" = "R" ] ; then
+	   if [ -f /usr/sbin/rpc.statd ]; then
+		stopsrc -f -s rpc.statd
+	   fi
+	fi
+
+	# Stop gssd daemon if the "-d" flag was not set
+	if [ "${DFLAG}" = "R" ] ; then
+   	   if [ -f /usr/sbin/gssd ]; then
+		stopsrc -f -s gssd
+	   fi
+	fi
+
+	# Stop nfsrgyd daemon if the "-d" flag was not set
+	if [ "${DFLAG}" = "R" ] ; then
+   	   if [ -f /usr/sbin/nfsrgyd ]; then
+		stopsrc -f -s nfsrgyd
+	   fi
+	fi
+
+	# Stop rpc.mountd daemon
+	if [ -f /usr/sbin/rpc.mountd ]; then
+		stopsrc -f -s rpc.mountd
+	fi
+fi
+
+if [ "${NIS}" = "Y" ] ; then
+	# Stop ypserv daemon
+	if [ "${DFLAG}" = "R" -a "${NIS_FLAG}" = "N" ] ; then
+	   if [ -f /usr/lib/netsvc/yp/ypserv ]; then
+		stopsrc -f -s ypserv
+	   fi
+	fi
+
+	# Stop ypbind daemon
+	if [ "${DFLAG}" = "R" -a "${NIS_FLAG}" = "N" ] ; then
+	   if [ -f /usr/lib/netsvc/yp/ypbind ]; then
+		stopsrc -f -s ypbind
+	   fi
+
+	   #
+	   # since we're stopping ypbind, perhaps we should
+	   # also turn the domainname off?
+	   #
+	   if [ -f /usr/bin/domainname ]; then
+		domainname ""
+	   fi
+	fi
+
+	# Stop yppasswdd daemon
+	if [ -f /usr/lib/netsvc/yp/rpc.yppasswdd ]; then
+		stopsrc -f -s yppasswdd
+	fi
+
+	# Stop ypupdated daemon
+	if [ -f /usr/lib/netsvc/yp/rpc.ypupdated ]; then
+		stopsrc -f -s ypupdated
+	fi
+
+	# Stop nis+ cachemgr
+	if [ "${DFLAG}" = "R" -a "${NIS_FLAG}" = "N" ] ; then
+	   if [ -f /usr/sbin/nis_cachemgr ]; then
+		stopsrc -f -s nis_cachemgr
+	   fi
+	fi
+
+	# Stop nis+ daemon
+	if [ -f /usr/sbin/rpc.nisd ]; then
+		stopsrc -f -s rpc.nisd
+	fi
+
+	# Stop nis+ passwd daemon
+	if [ -f /usr/sbin/rpc.nispasswdd ]; then
+		stopsrc -f -s rpc.nispasswdd
+	fi
+fi
+
+exit 0

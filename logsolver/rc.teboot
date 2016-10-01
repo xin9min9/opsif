@@ -1,0 +1,69 @@
+#!/../usr/bin/ksh
+# IBM_PROLOG_BEGIN_TAG         
+# This is an automatically generated prolog.  
+#                            
+# $Source: aix71D bos/etc/rc.teboot/rc.teboot.sh 4$                         
+#                                                           
+# COPYRIGHT International Business Machines Corp. 2011,2011              
+#                                                                      
+# Pvalue: p2 
+#Licensed Materials - Property of IBM
+#
+#Restricted Materials of IBM
+#
+#US Government Users Restricted Rights - Use, duplication or
+#disclosure restricted by GSA ADP Schedule Contract with IBM Corp.
+#
+# Origin: 27
+#
+# sccsid: $Header: @(#) AIX71D_area/4 bos/etc/rc.teboot/rc.teboot.sh, cmdstrust, aix71D, 1119A_71D 2011-05-06T15:58:18-05:00$
+#
+# IBM_PROLOG_END_TAG
+
+export LIBPATH=/../usr/lib
+
+# Extend TE measurements to PCR 10 during boot
+FSARGS="-p 10"
+ 
+if [ -n "$1" ]
+then
+	FSARGS=$@
+else
+	echo "rc.teboot: executing filescan to measure TE.." >&2
+fi
+
+# Measure TE Components ...
+for file in /usr/sbin/trustchk		 \
+	/etc/security/tsd/tsd.dat	 \
+	/etc/security/tsd/tepolicies.dat \
+	/usr/lib/drivers/crypto/clickext \
+	/usr/lib/methods/loadkclic	 \
+	/usr/lib/libc.a			 \
+	/usr/lib/libpthreads.a		 \
+	/usr/lib/libodm.a		 \
+	/usr/lib/libmls.a		 \
+	/usr/lib/libmlsenc.a		 \
+	/usr/lib/libcrypt.a
+do
+	/../usr/sbin/filescan $FSARGS -f $file
+	if [ $? -ne 0 ]
+	then
+		exit 1
+	fi
+done
+
+# do measurements only, if arguments are provided or trusted boot not enabled
+if [ -n "$1" -o "$(/../usr/sbin/bootinfo -V)" -eq 0 ]
+then
+	exit 0
+fi
+
+export LIBPATH=/usr/lib
+export PATH=/usr/sbin
+
+/usr/lib/methods/loadkclic -l >&2
+
+echo "rc.teboot: executing trustchk to enable CHK* policies.." >&2
+trustchk -b 2 >&2
+
+exit 0

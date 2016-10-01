@@ -1,0 +1,786 @@
+#!/bin/sh
+# $Revision: 1.41.16.1 $
+#
+#***************************************************************************
+# $VRTScprght: Copyright 2014 Symantec Corporation, All Rights Reserved SY39-6648-5573-26-15-5  $
+#***************************************************************************
+#
+# netbackup.sh
+#
+# Start/Stop the NetBackup request daemon at system initiation/shutdown.
+# Starts/Stops the Media Manager device daemon (ltid).
+# Starts/Stops the Sysbase ASA server (NB_dbsrv)
+#
+# Note - when the Media Manager device daemon (ltid) is started,
+# it automatically starts the Media Manager volume daemon
+# (/usr/openv/volmgr/bin/vmd) and robotic daemons as required.
+#
+# The following two lines are used by RedHat Linux "chkconfig" command
+# and are NOT comments.
+# chkconfig: 235 77 01
+# description: NetBackup
+#
+# The following INIT INFO block is used by SuSE insserv command and is NOT a comment.
+### BEGIN INIT INFO
+# Provides: netbackup
+# Required-Start: $network vxpbx_exchanged
+# Required-Stop: $network vxpbx_exchanged
+# Default-Start: 2 3 5
+# Default-Stop: 0 1 6
+# Description: NetBackup
+### END INIT INFO
+#
+
+NBPATH=/usr/openv/netbackup/bin
+PDDEPATH=/usr/openv/pdde
+VMPATH=/usr/openv/volmgr/bin
+VMPS=/usr/openv/volmgr/bin/vmps
+BPPS=/usr/openv/netbackup/bin/bpps
+LTID=/usr/openv/volmgr/bin/ltid
+TL8CD=/usr/openv/volmgr/bin/tl8cd
+TLDCD=/usr/openv/volmgr/bin/tldcd
+TLHCD=/usr/openv/volmgr/bin/tlhcd
+BPRD=/usr/openv/netbackup/bin/initbprd
+NB_DBSRV=/usr/openv/db/bin/NB_dbsrv
+MAKE_SCSI_DEV=/usr/openv/volmgr/bin/make_scsi_dev
+BPCONF=/usr/openv/netbackup/bp.conf
+BPRDREQ=/usr/openv/netbackup/bin/admincmd/bprdreq
+STOPLTID=/usr/openv/volmgr/bin/stopltid
+VMCTRLDBM=/usr/openv/volmgr/bin/vmctrldbm
+MKDEV_OVPASS=/usr/openv/volmgr/bin/driver/mkdev_ovpass
+BMRD=/usr/openv/netbackup/bin/rc.bmrd
+
+FORCE_INIT_INQUIRY=/usr/openv/netbackup/db/config/FORCE_INIT_INQUIRY
+
+SPACE=' '
+BLANK=''
+RETURN=0
+
+# Intentionally set TMPDIR to /tmp.
+TMPDIR=/tmp
+
+PATH=$PATH:/usr/bin
+export PATH
+
+PRG=`basename $0`
+TMPF=${TMPDIR}/${PRG}.$$
+/bin/rm -f $TMPF
+
+is_media_server_only=0
+PS="/bin/ps -ea"
+case `uname -s` in
+	Darwin*) PS="/bin/ps -ax" ;;
+	FreeBSD*)
+		PS="/bin/ps -ax"
+		# This can be removed once $ORIGIN starts working.
+		compat_dir=""
+		os_major=`uname -r | cut -f1 -d"."`
+		if [ "${os_major}" -gt 6 ] ; then
+			compat_dir=":/usr/local/lib/compat"
+		fi
+		ProcessorType=`uname -p`
+		if [ "${ProcessorType}" != "i386" ] ; then
+			LD_32_LIBRARY_PATH="/usr/openv/lib:/usr/local/lib32/compat${compat_dir}"
+			export LD_32_LIBRARY_PATH
+		else
+			LD_LIBRARY_PATH="/usr/openv/lib${compat_dir}"
+			export LD_LIBRARY_PATH
+		fi
+		;;
+	HP-UX)
+		# Starting with NB 7.0, the HP PA-RISC platform no longer
+		# supports being an emm server so some daemons are no
+		# longer available on that platform.  Set a switch.
+
+		if [ "`uname -m`" != "ia64" ] ; then
+			is_media_server_only=1
+		fi
+		;;
+	Linux)
+		if [ "`uname -m`" = "s390x" ] ; then
+			is_media_server_only=1
+		fi
+		;;
+esac
+
+ARG="${1}"
+
+if [ -z "${ARG}" ] ; then
+	ARG=start
+fi
+
+term_with_kill ()
+{
+	killstr=$1
+	signal=$2
+	processes=`${BPPS} | egrep -v '[ /\[]NB_dbsrv' | grep -v grep \
+	grep "$killstr" | awk '{print $2}'`
+	for process in $processes
+	do
+		if [ Y"$signal" != Y ] ; then
+			kill -${signal} $process > /dev/null 2>/dev/null
+		else
+			kill $process > /dev/null 2>/dev/null
+		fi
+	done
+}
+
+stop_acs_daemon ()
+{
+	process="$*"
+	kill $process > /dev/null 2>/dev/null
+}
+
+case "${ARG}" in
+start)
+	# The Authentication daemon must be first.
+
+	if [ -f /usr/openv/netbackup/version ] ; then
+		if [ -x ${NBPATH}/nbatd ] ; then
+			${NBPATH}/nbatd
+			echo "NetBackup Authentication daemon started."
+		else
+			RETURN=2
+			echo "NetBackup Authentication daemon not started."
+		fi
+	fi
+
+	# NB client daemons start first except for bmrbd which
+	# is dependent on bmrd.
+
+	if [ -x ${NBPATH}/vnetd ] ; then
+		${NBPATH}/vnetd -standalone
+		echo "NetBackup network daemon started."
+	else
+		RETURN=2
+		echo "NetBackup network daemon not started."
+	fi
+
+	if [ -x ${NBPATH}/bpcd ] ; then
+		${NBPATH}/bpcd -standalone
+		echo "NetBackup client daemon started."
+	else
+		RETURN=2
+		echo "NetBackup client daemon not started."
+	fi
+
+	if [ -f ${NBPATH}/nbftclnt ] ; then
+		# Intentionally shut off stdout messages but not stderr.
+		${NBPATH}/nbftclnt > /dev/null
+		echo "NetBackup SAN Client Fibre Transport daemon started."
+	fi
+
+	if [ -f ${NBPATH}/nbdisco ] ; then
+		${NBPATH}/nbdisco
+		echo "NetBackup Discovery Framework started."
+	fi
+
+	# This section is for NB server daemons.
+
+	if [ -f /usr/openv/netbackup/version ] ; then
+		if [ "`uname -s`" = "AIX" ] ; then
+			if [ -x ${MKDEV_OVPASS} ] ; then
+				$MKDEV_OVPASS
+
+				if [ -f "$FORCE_INIT_INQUIRY" ] ; then
+					INQUIRY=/usr/openv/volmgr/bin/scsi_command
+					TPCONFIG=/usr/openv/volmgr/bin/tpconfig
+					for i in `$TPCONFIG -d | grep rmt | awk '{ print $3 }' `
+					do
+						echo "Forcing initial SCSI inquiry to $i" > /dev/console
+						$INQUIRY -d $i > /dev/null 2>&1
+					done
+				fi
+			else
+				echo "ERROR executing mkdev_ovpass !"
+			fi
+		fi
+
+		#  Need to start NB_dbsrv before anyone else gets started
+
+		NB_dbsrv_PID=`$BPPS | grep NB_dbsrv | grep -v grep | awk '{print $2}'`
+		if [ "$NB_dbsrv_PID" = "" -a "${is_media_server_only}" -eq 0 ] ; then
+			${NBPATH}/nbdbms_start_stop start
+			if [ $? != 0 ] ; then
+				echo "NetBackup will not run without ${NB_DBSRV} running"
+			else
+				echo "NetBackup Database Server started."
+			fi
+		fi
+
+		if [ -x ${NBPATH}/nbazd ] ; then
+			${NBPATH}/nbazd
+			echo "NetBackup Authorization daemon started."
+		else
+			RETURN=2
+			echo "NetBackup Authorization daemon not started."
+		fi
+
+		if [ -x ${NBPATH}/nbevtmgr ] ; then
+			${NBPATH}/nbevtmgr
+			echo "NetBackup Event Manager started."
+		else
+			RETURN=2
+			echo "NetBackup Event Manager not started."
+		fi
+
+		if [ "${is_media_server_only}" -eq 0 ] ; then
+			if [ -x ${NBPATH}/nbaudit ] ; then
+				${NBPATH}/nbaudit
+				echo "NetBackup Audit Manager started."
+			else
+				RETURN=2
+				echo "NetBackup Audit Manager not started."
+			fi
+		fi
+
+		# If PDDE is present, start its daemons.
+
+		if [ -f ${PDDEPATH}/pdconfigure/pdde ] ; then
+			${PDDEPATH}/pdconfigure/pdde spad start >/dev/null 2>&1
+			if [ $? != 0 ] ; then
+				echo "NetBackup Deduplication Manager not started."
+				RETURN=2
+			else
+				echo "NetBackup Deduplication Manager started." 
+			fi
+		
+			${PDDEPATH}/pdconfigure/pdde spoold start >/dev/null 2>&1
+			if [ $? != 0 ] ; then
+				echo "NetBackup Deduplication Engine not started."
+				RETURN=2
+			else
+				echo "NetBackup Deduplication Engine started." 
+			fi
+		fi
+	fi
+
+	# mtstrmd is a client daemon but needs to be started after spad
+	# and spoold on a server.
+
+	if [ -f ${PDDEPATH}/pdag/bin/mtstrmd ] ; then
+		${PDDEPATH}/pdag/bin/mtstrmd >/dev/null 2>&1
+		if [ $? != 0 ] ; then
+			echo "NetBackup Deduplication Multi-Threaded Agent not started."
+			RETURN=2
+		else
+			echo "NetBackup Deduplication Multi-Threaded Agent started." 
+		fi
+	fi
+
+	# This section is for NB server daemons.
+
+	if [ -f /usr/openv/netbackup/version ] ; then
+
+		if [ "${is_media_server_only}" -eq 0 ] ; then
+			if [ -x ${NBPATH}/nbemm ] ; then
+				${NBPATH}/nbemm
+				echo "NetBackup Enterprise Media Manager started."
+			else
+				RETURN=2
+				echo "NetBackup Enterprise Media Manager not started."
+			fi
+
+			if [ -x ${NBPATH}/nbrb ] ; then
+				${NBPATH}/nbrb
+				echo "NetBackup Resource Broker started."
+			else
+				RETURN=2
+				echo "NetBackup Resource Broker not started."
+			fi
+		fi
+
+		# Be sure that the sg driver module is loaded
+		if [ "`uname -s`" = "Linux" ] ; then
+			/sbin/modprobe sg
+		fi
+
+		# Don't start ltid if already started by HSM startup script.
+			$VMPS > $TMPF
+			if [ -f "$LTID" ]
+			then
+				ltid=`grep ltid $TMPF`
+				if test Y"$ltid" = Y
+				then
+					if [ -x ${MAKE_SCSI_DEV} -a "`uname -s`" = "Linux" ] ; then
+						echo "Rebuilding device nodes."
+						$MAKE_SCSI_DEV
+					fi
+					$LTID > /dev/null 2>&1
+					echo "Media Manager daemons started."
+				fi
+			else
+				RETURN=1
+				echo "Media Manager daemons not started."
+			fi
+
+			/bin/rm -f $TMPF
+
+		if [ "${is_media_server_only}" -eq 0 ] ; then
+			if [ -x "${BPRD}" ] ; then
+				${BPRD}
+				echo "NetBackup request daemon started."
+			else
+				RETURN=2
+				echo "NetBackup request daemon not started."
+			fi
+		fi
+
+		if [ -x ${NBPATH}/bpcompatd ] ; then
+			${NBPATH}/bpcompatd
+			echo "NetBackup compatibility daemon started."
+		else
+			RETURN=2
+			echo "NetBackup compatibility daemon not started."
+		fi
+
+		if [ -x ${NBPATH}/nbjm ] ; then
+			${NBPATH}/nbjm
+			echo "NetBackup Job Manager started."
+		else
+			RETURN=2
+			echo "NetBackup Job Manager not started."
+		fi
+
+		if [ -x ${NBPATH}/nbpem ] ; then
+			${NBPATH}/nbpem
+			echo "NetBackup Policy Execution Manager started."
+		else
+			RETURN=2
+			echo "NetBackup Policy Execution Manager not started."
+		fi
+
+		if [ -x ${NBPATH}/nbstserv ] ; then
+			${NBPATH}/nbstserv
+			echo "NetBackup Storage Lifecycle Manager started."
+		else
+			RETURN=2
+			echo "NetBackup Storage Lifecycle Manager not started."
+		fi
+
+		if [ -x ${NBPATH}/nbrmms ] ; then
+			${NBPATH}/nbrmms
+			echo "NetBackup Remote Monitoring Management System started."
+		else
+			RETURN=2
+			echo "NetBackup Remote Monitoring Management System not started."
+		fi
+
+		if [ -x ${NBPATH}/nbkms ] ; then
+			${NBPATH}/nbkms
+			echo "NetBackup Key Management daemon started."
+		else
+			RETURN=2
+			echo "NetBackup Key Management daemon not started."
+		fi
+
+		if [ -x ${NBPATH}/nbsl ] ; then
+			${NBPATH}/nbsl
+			echo "NetBackup Service Layer started."
+		else
+			RETURN=2
+			echo "NetBackup Service Layer not started."
+		fi
+
+		if [ "${is_media_server_only}" -eq 0 ] ; then
+			if [ -x ${NBPATH}/nbim ] ; then
+				${NBPATH}/nbim
+				echo "NetBackup Indexing Manager started."
+			else
+				RETURN=2
+				echo "NetBackup Indexing Manager not started."
+			fi
+
+			if [ -x ${NBPATH}/nbars ] ; then
+				${NBPATH}/nbars
+				echo "NetBackup Agent Request Server started."
+			else
+				RETURN=2
+				echo "NetBackup Agent Request Server not started."
+			fi
+
+			${BMRD} start >/dev/null 2>&1
+			if [ $? != 0 ] ; then
+				echo "NetBackup Bare Metal Restore daemon not started."
+				RETURN=2
+			else
+				echo "NetBackup Bare Metal Restore daemon started."
+			fi
+
+			if [ -f ${NBPATH}/nbwmc ] ; then
+				if [ -x ${NBPATH}/nbwmc ] ; then
+					${NBPATH}/nbwmc
+					echo "NetBackup Web Management Console started."
+				else
+					RETURN=2
+					echo "NetBackup Web Management Console not started."
+				fi
+			fi
+		fi
+
+		if [ -x ${NBPATH}/nbvault ] ; then
+			${NBPATH}/nbvault >/dev/null 2>&1
+			echo "NetBackup Vault daemon started."
+		else
+			RETURN=2
+			echo "NetBackup Vault daemon not started."
+		fi
+
+		if [ -x ${NBPATH}/nbcssc ] ; then
+			${NBPATH}/nbcssc -a NetBackup >/dev/null 2>&1
+			echo "NetBackup CloudStore Service Container started."
+		else
+			RETURN=2
+			echo "NetBackup CloudStore Service Container not started."
+		fi
+
+		if [ -x ${NBPATH}/nbsvcmon ] ; then
+			${NBPATH}/nbsvcmon
+			echo "NetBackup Service Monitor started."
+		else
+			RETURN=2
+			echo "NetBackup Service Monitor not started."
+		fi
+	fi
+
+	#  See if BMR Boot Server has been installed.  If so, start its
+	#  daemon.  Must happen after bmrd.
+
+	if [ -f ${NBPATH}/rc.bmrbd ] ; then
+		${NBPATH}/rc.bmrbd start >/dev/null 2>&1
+		if [ $? -ne 0 ] ; then
+			RETURN=2
+			echo "NetBackup Bare Metal Restore Boot Server daemon not started."
+		else
+			echo "NetBackup Bare Metal Restore Boot Server daemon started."
+		fi
+	fi
+
+#
+# This locking file is used by LINUX init
+#
+	if [ -d /var/lock/subsys ] ; then
+		touch /var/lock/subsys/netbackup
+	fi
+	;;
+stop)
+
+	IS_NETBACKUP_DAEMON=YES
+	export IS_NETBACKUP_DAEMON
+
+	#  See if BMR Boot Server has been installed.  If so, stop its daemon.
+	#  bmrbd blocks SIGTERM so use SIGKILL here, if it won't go
+	#  down gracefully.  Must go down before bmrd.
+
+	BMRBS_PID=`${PS} | grep bmrbd | grep -v grep | awk '{print $1}'`
+	if [ "${BMRBS_PID}" != "" -a -f ${NBPATH}/rc.bmrbd ] ; then
+		echo "stopping the NetBackup Bare Metal Restore Boot Server daemon"
+		${NBPATH}/rc.bmrbd stop >/dev/null 2>&1
+
+		sleep 2
+		BMRBS_PID=`${PS} | grep bmrbd | grep -v grep | awk '{print $1}'`
+		if [ "${BMRBS_PID}" != "" ] ; then
+			kill -KILL ${BMRBS_PID} >/dev/null 2>&1
+		fi
+	fi
+
+	# This section is for NB server daemons.
+
+	if [ -f /usr/openv/netbackup/version ] ; then
+		NBSVCMON_PID=`$PS | grep nbsvcmon | grep -v grep | awk '{print $1}'`
+		if [ "$NBSVCMON_PID" != "" ] ; then
+			echo "stopping the NetBackup Service Monitor"
+			${NBPATH}/nbsvcmon -terminate 2> /dev/null
+		fi
+
+		NBCSSC_PID=`${BPPS} | grep nbcssc | grep -v grep | awk '{print $2}'`
+		if [ "${NBCSSC_PID}" != "" -a -f ${NBPATH}/nbcssc ] ; then
+			echo "stopping the NetBackup CloudStore Service Container"
+			${NBPATH}/nbcssc -terminate >/dev/null 2>&1
+		fi
+
+		#  If vault is present, stop its daemon.
+
+		NBVLT_PID=`${BPPS} | grep nbvault | grep -v grep | awk '{print $2}'`
+		if [ "${NBVLT_PID}" != "" -a -f ${NBPATH}/nbvault ] ; then
+			echo "stopping the NetBackup Vault daemon"
+			${NBPATH}/nbvault -terminate >/dev/null 2>&1
+		fi
+
+		NBWMC_PID=`${BPPS} | grep nbwmc | grep -v grep | awk '{print $2}'`
+		if [ "${NBWMC_PID}" != "" -a -f ${NBPATH}/nbwmc ] ; then
+			echo "stopping the NetBackup Web Management Console"
+			${NBPATH}/nbwmc -terminate 2>/dev/null
+		fi
+
+		#  See if BMR has been installed.  If so, stop its daemon.
+		#  bmrd blocks SIGTERM so use SIGKILL here, if it won't go
+		#  down gracefully.
+
+		BMR_PID=`$PS | grep bmrd | grep -v grep | awk '{print $1}'`
+		if [ "${BMR_PID}" != "" -a -f ${BMRD} ] ; then
+			echo "stopping the NetBackup Bare Metal Restore daemon"
+			${BMRD} stop >/dev/null 2>&1
+
+			sleep 2
+			BMR_PID=`$PS | grep bmrd | grep -v grep | awk '{print $1}'`
+			if [ "${BMR_PID}" != "" ] ; then
+				kill -KILL ${BMR_PID} > /dev/null 2>/dev/null
+			fi
+		fi
+
+		NBARS_PID=`${PS} | grep nbars | grep -v grep | awk '{print $1}'`
+		if [ "${NBARS_PID}" != "" ] ; then
+			echo "stopping the NetBackup Agent Request Server"
+			${NBPATH}/nbars -terminate 2>/dev/null
+		fi
+
+		NBIM_PID=`$PS | grep nbim | grep -v grep | awk '{print $1}'`
+		if [ "$NBIM_PID" != "" ] ; then
+			echo "stopping the NetBackup Indexing Manager"
+			${NBPATH}/nbim -terminate 2> /dev/null
+		fi
+
+		NBSL_PID=`${BPPS} | grep nbsl | grep -v grep | awk '{print $2}'`
+		if [ "${NBSL_PID}" != "" ] ; then
+			echo "stopping the NetBackup Service Layer"
+			${NBPATH}/nbsl -terminate 2>/dev/null
+		fi
+
+		NBKMS_PID=`${BPPS} | grep nbkms | grep -v grep | awk '{print $2}'`
+		if [ "${NBKMS_PID}" != "" ] ; then
+			echo "stopping the NetBackup Key Management daemon"
+			${NBPATH}/nbkms -terminate 2>/dev/null
+		fi
+
+		NBRMMS_PID=`$PS | grep nbrmms | grep -v grep | awk '{print $1}'`
+		if [ "$NBRMMS_PID" != "" ] ; then
+			echo "stopping the NetBackup Remote Monitoring Management System"
+			${NBPATH}/nbrmms -terminate 2> /dev/null
+		fi
+
+		NBSTSERV_PID=`$PS | grep nbstserv | grep -v grep | awk '{print $1}'`
+		if [ "$NBSTSERV_PID" != "" ] ; then
+			echo "stopping the NetBackup Storage Lifecycle Manager"
+			${NBPATH}/nbstserv -terminate 2> /dev/null
+		fi
+
+		NBPEM_PID=`$PS | grep nbpem | grep -v grep | awk '{print $1}'`
+		if [ "$NBPEM_PID" != "" ] ; then
+			echo "stopping the NetBackup Policy Execution Manager"
+			${NBPATH}/nbpem -terminate 2> /dev/null
+		fi
+
+		NBJM_PID=`$PS | grep nbjm | grep -v grep | awk '{print $1}'`
+		if [ "$NBJM_PID" != "" ] ; then
+			echo "stopping the NetBackup Job Manager"
+			${NBPATH}/nbjm -terminate 2> /dev/null
+		fi
+
+		NBPROXY_PID=`$PS | grep nbproxy | grep -v grep | awk '{print $1}'`
+		if [ "${NBPROXY_PID}" != "" ] ; then
+			echo "stopping nbproxy..."
+			${NBPATH}/admincmd/nbproxyreq -all > /dev/null
+		fi
+
+		BPRD_PID=`$PS | grep bprd | grep -v grep | awk '{print $1}'`
+		if [ "$BPRD_PID" != "" ] ; then
+			# Comments in bp.kill_all explain why we explicitly
+			# specify -M localhost in this command.
+			echo "stopping the NetBackup request daemon"
+			${BPRDREQ} -M localhost -terminate 2> /dev/null
+		fi
+
+		COMPATD_PID=`$PS | grep bpcompat | grep -v grep | awk '{print $1}'`
+		if [ "$COMPATD_PID" != "" ] ; then
+			echo "stopping the NetBackup compatibility daemon"
+			${NBPATH}/bpcompatd -terminate > /dev/null 2>&1
+		fi
+
+		BPDBM_PID=`$PS | grep bpdbm | grep -v grep | awk '{print $1}'`
+		if [ "$BPDBM_PID" != "" ] ; then
+			# Comments in bp.kill_all explain why we specify
+			# -terminate_local rather than -terminate in this command.
+			echo "stopping the NetBackup database daemon"
+			/usr/openv/netbackup/bin/bpdbm -terminate_local 2> /dev/null
+		fi
+
+		LTID_PID=`$PS | grep ltid | grep -v grep | awk '{print $1}'`
+		if [ "$LTID_PID" != "" ] ; then
+			echo "stopping the Media Manager device daemon"
+			${STOPLTID} 2> /dev/null
+		fi
+
+		VMD_PID=`$PS | egrep '[ /]vmd' | grep -v grep | awk '{print $1}'`
+		if [ "$VMD_PID" != "" ] ; then
+			echo "stopping the Media Manager volume daemon"
+			${VMCTRLDBM} -t 2> /dev/null
+		fi
+		
+		# The case for stopping tl*cd daemons is unique.
+		# Usually, ltid daemon will take down the robotic
+		# control daemons when it is being terminated.
+		# However, in some configurations, ltid is not running
+		# on a server. Therefore, we need to make sure that
+		# the tl*cd daemons are down.
+
+		robotic_pids=`$PS | egrep '[ /]tl[8dh]cd' | grep -v grep | awk '{print $1}'`
+		if [ "$robotic_pids" != "" ] ; then
+			echo "stopping the Media Manager robotic control daemons"
+		fi
+
+		TL8CD_PID=`$PS | egrep '[ /]tl8cd' | grep -v grep | awk '{print $1}'`
+		if [ "$TL8CD_PID" != "" ] ; then
+			${TL8CD} -t 2> /dev/null
+		fi
+
+		TLDCD_PID=`$PS | egrep '[ /]tldcd' | grep -v grep | awk '{print $1}'`
+		if [ "$TLDCD_PID" != "" ] ; then
+			${TLDCD} -t 2> /dev/null
+		fi
+		
+		TLHCD_PID=`$PS | egrep '[ /]tlhcd' | grep -v grep | awk '{print $1}'`
+		if [ "$TLHCD_PID" != "" ] ; then
+			${TLHCD} -t 2> /dev/null
+		fi
+
+		NBRB_PID=`$PS | grep nbrb | grep -v grep | awk '{print $1}'`
+		if [ "$NBRB_PID" != "" ] ; then
+			echo "stopping the NetBackup Resource Broker"
+			${NBPATH}/nbrb -terminate 2> /dev/null
+		fi
+
+		NBEMM_PID=`${PS} | grep nbemm | grep -v grep | awk '{print $1}'`
+		if [ "${NBEMM_PID}" != "" ] ; then
+			echo "stopping the NetBackup Enterprise Media Manager"
+			${NBPATH}/nbemm -terminate 2>/dev/null
+		fi
+
+		ACSSSI_PID=`$PS | grep acsssi | grep -v grep | awk '{print $1}'`
+		if [ "$ACSSSI_PID" != "" ] ; then
+			echo "stopping the Automated Cartridge System Storage Server Interface daemon"
+			# sleep matches what was already in bp.kill_all
+			sleep 20
+			stop_acs_daemon $ACSSSI_PID
+		fi
+
+		ACSSEL_PID=`$PS | grep acssel | grep -v grep | awk '{print $1}'`
+		if [ "$ACSSEL_PID" != "" ] ; then
+			echo "stopping the Automated Cartridge System SSI Event Logger daemon"
+			stop_acs_daemon $ACSSEL_PID
+		fi
+	fi
+
+	# mtstrmd is a client daemon but needs to be shut down before spad
+	# and spoold on a server.
+
+	MTSTRMD_PID=`${BPPS} | grep mtstrmd | grep -v grep | awk '{print $2}'`
+	if [ "${MTSTRMD_PID}" != "" -a -f ${PDDEPATH}/pdag/bin/mtstrmd ] ; then
+		echo "stopping the NetBackup Deduplication Multi-Threaded Agent"
+		${PDDEPATH}/pdag/bin/mtstrmd -terminate > /dev/null 2>&1
+	fi
+
+	# This section is for NB server daemons.
+
+	if [ -f /usr/openv/netbackup/version ] ; then
+
+		# If PDDE is present, stop its daemons.
+
+		SPOOLD_PID=`${BPPS} | grep spoold | grep -v grep | awk '{print $2}'`
+		if [ "${SPOOLD_PID}" != "" -a -f ${PDDEPATH}/pdconfigure/pdde ] ; then
+			echo "stopping the NetBackup Deduplication Engine"
+			${PDDEPATH}/pdconfigure/pdde spoold stop > /dev/null 2>&1
+		fi
+
+		SPAD_PID=`${BPPS} | grep spad | grep -v grep | awk '{print $2}'`
+		if [ "${SPAD_PID}" != "" -a -f ${PDDEPATH}/pdconfigure/pdde ] ; then
+			echo "stopping the NetBackup Deduplication Manager"
+			${PDDEPATH}/pdconfigure/pdde spad stop > /dev/null 2>&1
+		fi
+
+		NBAUDIT_PID=`${BPPS} | grep nbaudit | grep -v grep | awk '{print $2}'`
+		if [ "${NBAUDIT_PID}" != "" ] ; then
+			echo "stopping the NetBackup Audit Manager"
+			${NBPATH}/nbaudit -terminate 2>/dev/null
+		fi
+
+		# nbevtmgr is used by nb daemons so bring it down right before
+		# VxDBMS.
+
+		NBEVTMGR_PID=`${BPPS} | grep nbevtmgr | grep -v grep | awk '{print $2}'`
+		if [ "${NBEVTMGR_PID}" != "" ] ; then
+			echo "stopping the NetBackup Event Manager"
+			${NBPATH}/nbevtmgr -terminate 2>/dev/null
+		fi
+
+		NBAZD_PID=`${PS} | grep nbazd | grep -v grep | awk '{print $1}'`
+		if [ "${NBAZD_PID}" != "" ] ; then
+			echo "stopping the NetBackup Authorization daemon"
+			kill ${NBAZD_PID} > /dev/null 2>/dev/null
+		fi
+
+		# Need to stop NB_dbsrv last
+
+		NB_dbsrv_PID=`$BPPS | grep NB_dbsrv | grep -v grep | awk '{print $2}'`
+		if [ "$NB_dbsrv_PID" != "" ] ; then
+			echo "stopping the NetBackup Database Server"
+			${NBPATH}/nbdbms_start_stop stop
+		fi
+	fi
+
+	# NB client daemons stop last except for bmrbd which stops
+	# first due to a dependency on bmrd.
+
+	NBDISCO_PID=`${PS} | grep nbdisco | grep -v grep | awk '{print $1}'`
+	if [ "${NBDISCO_PID}" != "" -a -x ${NBPATH}/nbdisco ] ; then
+		echo "stopping the NetBackup Discovery Framework"
+		${NBPATH}/nbdisco -terminate 2> /dev/null
+	fi
+
+	NBFTCLNT_PID=`${PS} | grep nbftclnt | grep -v grep | awk '{print $1}'`
+	if [ "${NBFTCLNT_PID}" != "" -a -x ${NBPATH}/nbftclnt ] ; then
+		echo "stopping the NetBackup SAN Client Fibre Transport daemon"
+		${NBPATH}/nbftclnt -terminate 2> /dev/null
+	fi
+
+	BPCD_PID=`${PS} | grep bpcd | grep -v grep | awk '{print $1}'`
+	if [ "${BPCD_PID}" != "" -a -x ${NBPATH}/bpcd ] ; then
+		echo "stopping the NetBackup client daemon"
+		${NBPATH}/bpcd -terminate 2> /dev/null
+	fi
+
+	VNETD_PID=`${PS} | grep vnetd | grep -v grep | awk '{print $1}'`
+	if [ "${VNETD_PID}" != "" -a -x ${NBPATH}/vnetd ] ; then
+		echo "stopping the NetBackup network daemon"
+		${NBPATH}/vnetd -terminate 2> /dev/null
+	fi
+
+	NBRNTD_PID=`${PS} | grep nbrntd | grep -v grep | awk '{print $1}'`
+	if [ "${NBRNTD_PID}" != "" -a -x ${NBPATH}/nbrntd ] ; then
+		echo "stopping the NetBackup network resiliency process"
+		${NBPATH}/nbrntd -terminate 2> /dev/null
+	fi
+
+	NBATD_PID=`${PS} | grep nbatd | grep -v grep | awk '{print $1}'`
+	if [ "${NBATD_PID}" != "" ] ; then
+		echo "stopping the NetBackup Authentication daemon"
+		kill ${NBATD_PID} > /dev/null 2>/dev/null
+	fi
+
+#
+# Lock file used by LINUX init
+#
+	rm -f /var/lock/subsys/netbackup
+	;;
+start_msg)
+	echo "Starting NetBackup"
+	;;
+stop_msg)
+	echo "Stopping NetBackup"
+	;;
+*)
+	echo "usage: $0 { start | stop | start_msg | stop_msg }"
+	RETURN=1
+	;;
+esac
+exit $RETURN
