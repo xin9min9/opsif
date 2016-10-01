@@ -1,3 +1,4 @@
+#!/bin/bash
 a01n15(){
 os_type=`uname -s`
 case $os_type in
